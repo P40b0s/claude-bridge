@@ -135,7 +135,7 @@ jobs:
               tar -C target/release -czf "dist/claude-bridge-cli-$VERSION-linux-x64.tar.gz" claude-bridge
               ;;
             macos)
-              app=ui/build/macos/Build/Products/Release/claude_bridge_ui.app
+              app="ui/build/macos/Build/Products/Release/Claude Bridge.app"
               cp target/release/claude-bridge "$app/Contents/MacOS/"
               # Adding a binary invalidates the bundle signature; re-sign ad hoc.
               codesign --force --deep --sign - "$app"

@@ -90,12 +90,12 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "dev.claudebridge" "\0"
-            VALUE "FileDescription", "claude_bridge_ui" "\0"
+            VALUE "FileDescription", "Claude Bridge" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "claude_bridge_ui" "\0"
+            VALUE "InternalName", "Claude Bridge" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 dev.claudebridge. All rights reserved." "\0"
-            VALUE "OriginalFilename", "claude_bridge_ui.exe" "\0"
-            VALUE "ProductName", "claude_bridge_ui" "\0"
+            VALUE "OriginalFilename", "Claude Bridge.exe" "\0"
+            VALUE "ProductName", "Claude Bridge" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

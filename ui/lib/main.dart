@@ -15,17 +15,17 @@ import 'package:claude_bridge_ui/src/themes.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:rinf/rinf.dart';
+
 import 'src/bindings/bindings.dart';
 
-Future<void> main() async
-{
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   AppServices.init();
   await initializeRust(assignRustSignal);
+  await AppServices.I.trayService.init();
   AppLifecycleListener(
-    onExitRequested: () async
-    {
-      //Прокси - отдельный процесс и продолжает обслуживать сессии после закрытия окна
+    onExitRequested: () async {
+      await AppServices.I.dispose();
       finalizeRust();
       return io.exit(0);
     },
@@ -33,21 +33,20 @@ Future<void> main() async
   runApp(const ClaudeBridgeApp());
 }
 
-class ClaudeBridgeApp extends StatelessWidget
-{
+class ClaudeBridgeApp extends StatelessWidget {
   const ClaudeBridgeApp({super.key});
 
   @override
-  Widget build(BuildContext context)
-  {
+  Widget build(BuildContext context) {
     return MultiProvider(
       providers: [
-        ChangeNotifierProvider.value(value: context.appServices.errorService.provider),
+        ChangeNotifierProvider.value(
+          value: context.appServices.errorService.provider,
+        ),
       ],
       child: ListenableBuilder(
         listenable: Listenable.merge([themeNotifier, langNotifier]),
-        builder: (_, _)
-        {
+        builder: (_, _) {
           return MaterialApp(
             title: 'Claude Bridge',
             theme: AppTheme.light,
@@ -63,8 +62,7 @@ class ClaudeBridgeApp extends StatelessWidget
   }
 }
 
-class _Destination
-{
+class _Destination {
   const _Destination(this.label, this.icon, this.selectedIcon, this.page);
   final String label;
   final IconData icon;
@@ -73,45 +71,77 @@ class _Destination
 }
 
 List<_Destination> get _destinations => [
-  _Destination(tr('Главная', 'Home'), Icons.hub_outlined, Icons.hub, const HomePage()),
-  _Destination(tr('Провайдеры', 'Providers'), Icons.extension_outlined, Icons.extension, const ProvidersPage()),
-  _Destination(tr('Аккаунты', 'Accounts'), Icons.account_circle_outlined, Icons.account_circle, const AccountsPage()),
-  _Destination(tr('Запросы', 'Requests'), Icons.list_alt_outlined, Icons.list_alt, const RequestsPage()),
-  _Destination(tr('Страны', 'Countries'), Icons.public_outlined, Icons.public, const GeoPage()),
-  _Destination(tr('Настройки', 'Settings'), Icons.settings_outlined, Icons.settings, const SettingsPage()),
+  _Destination(
+    tr('Главная', 'Home'),
+    Icons.hub_outlined,
+    Icons.hub,
+    const HomePage(),
+  ),
+  _Destination(
+    tr('Провайдеры', 'Providers'),
+    Icons.extension_outlined,
+    Icons.extension,
+    const ProvidersPage(),
+  ),
+  _Destination(
+    tr('Аккаунты', 'Accounts'),
+    Icons.account_circle_outlined,
+    Icons.account_circle,
+    const AccountsPage(),
+  ),
+  _Destination(
+    tr('Запросы', 'Requests'),
+    Icons.list_alt_outlined,
+    Icons.list_alt,
+    const RequestsPage(),
+  ),
+  _Destination(
+    tr('Страны', 'Countries'),
+    Icons.public_outlined,
+    Icons.public,
+    const GeoPage(),
+  ),
+  _Destination(
+    tr('Настройки', 'Settings'),
+    Icons.settings_outlined,
+    Icons.settings,
+    const SettingsPage(),
+  ),
 ];
 
-class HomeShell extends StatefulWidget
-{
+class HomeShell extends StatefulWidget {
   const HomeShell({super.key});
 
   @override
   State<HomeShell> createState() => _HomeShellState();
 }
 
-class _HomeShellState extends State<HomeShell>
-{
+class _HomeShellState extends State<HomeShell> {
   ///Статическое: вкладка сохраняется, когда смена языка пересоздаёт HomeShell
   static int _index = 0;
 
   @override
-  Widget build(BuildContext context)
-  {
+  Widget build(BuildContext context) {
     final dark = Theme.of(context).brightness == Brightness.dark;
     return Scaffold(
       appBar: AppBar(
         title: const Text('Claude Bridge'),
-        shape: Border(bottom: BorderSide(color: Theme.of(context).colorScheme.primary)),
+        shape: Border(
+          bottom: BorderSide(color: Theme.of(context).colorScheme.primary),
+        ),
         leading: const ProxyStatusIcon(),
         actions: [
           TextButton(
-            onPressed: () => context.appServices.settingsService.setLanguage(isRussian ? AppLang.en : AppLang.ru),
+            onPressed: () => context.appServices.settingsService.setLanguage(
+              isRussian ? AppLang.en : AppLang.ru,
+            ),
             child: Text(isRussian ? 'RU' : 'EN'),
           ),
           IconButton(
             icon: Icon(dark ? Icons.wb_sunny : Icons.nightlight_round),
             tooltip: tr('Тема', 'Theme'),
-            onPressed: () => themeNotifier.value = dark ? ThemeMode.light : ThemeMode.dark,
+            onPressed: () =>
+                themeNotifier.value = dark ? ThemeMode.light : ThemeMode.dark,
           ),
           Consumer<ErrorProvider>(
             builder: (context, errors, _) => IconButton(
@@ -134,7 +164,11 @@ class _HomeShellState extends State<HomeShell>
             onDestinationSelected: (i) => setState(() => _index = i),
             destinations: [
               for (final d in _destinations)
-                NavigationRailDestination(icon: Icon(d.icon), selectedIcon: Icon(d.selectedIcon), label: Text(d.label)),
+                NavigationRailDestination(
+                  icon: Icon(d.icon),
+                  selectedIcon: Icon(d.selectedIcon),
+                  label: Text(d.label),
+                ),
             ],
           ),
           const VerticalDivider(width: 1),
@@ -144,7 +178,10 @@ class _HomeShellState extends State<HomeShell>
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 1100),
                 //IndexedStack сохраняет состояние форм при переключении вкладок
-                child: IndexedStack(index: _index, children: [for (final d in _destinations) d.page]),
+                child: IndexedStack(
+                  index: _index,
+                  children: [for (final d in _destinations) d.page],
+                ),
               ),
             ),
           ),
