@@ -6,6 +6,7 @@ import 'package:claude_bridge_ui/src/i18n.dart';
 import 'package:claude_bridge_ui/src/pages/accounts_page.dart';
 import 'package:claude_bridge_ui/src/pages/geo_page.dart';
 import 'package:claude_bridge_ui/src/pages/home_page.dart';
+import 'package:claude_bridge_ui/src/pages/models_page.dart';
 import 'package:claude_bridge_ui/src/pages/providers_page.dart';
 import 'package:claude_bridge_ui/src/pages/requests_page.dart';
 import 'package:claude_bridge_ui/src/pages/settings_page.dart';
@@ -88,6 +89,12 @@ List<_Destination> get _destinations => [
     Icons.account_circle_outlined,
     Icons.account_circle,
     const AccountsPage(),
+  ),
+  _Destination(
+    tr('Модели', 'Models'),
+    Icons.smart_toy_outlined,
+    Icons.smart_toy,
+    const ModelsPage(),
   ),
   _Destination(
     tr('Запросы', 'Requests'),

@@ -10,6 +10,7 @@ pub mod error;
 pub mod families;
 pub mod geo;
 pub mod launcher;
+pub mod models;
 pub mod providers;
 pub mod request_log;
 pub mod routing;

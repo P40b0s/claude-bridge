@@ -14,7 +14,9 @@ write_interface!();
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    let _ = tracing_subscriber::fmt().with_max_level(tracing::Level::INFO).try_init();
+    let _ = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .try_init();
     spawn(create_actors());
     dart_shutdown().await;
 }

@@ -77,6 +77,8 @@ claude-bridge anthropic      # Claude Opus: вход Claude Code или ANTHROPI
 | `gemini`, `gemini-flash`, `gemini-3p`, `gemini-25p`, `gemini-25f` | Gemini через вход в Google |
 | `opus`, `anthropic:sonnet`, `anthropic:haiku` | Claude: через вход Claude Code или по `ANTHROPIC_API_KEY` |
 
+На вкладке **«Модели»** встроенные модели показаны вместе с пользовательскими. Новую модель Claude, GPT, Gemini или OpenAI-compatible можно добавить без перекомпиляции: задаются название, провайдер, Model ID и необязательное усилие. Пользовательские модели и модель, выбранная на главной странице, хранятся в `~/.claude-bridge/models.json`. Отключённый провайдер скрывает свои модели из списков, но не удаляет их.
+
 Ещё варианты:
 - **Суффикс усилия.** `@low|medium|high|xhigh|max` работает с любой моделью, например `/model terra@max` или `/model gemini-flash@low`.
 - **Явный провайдер.** `провайдер:модель`, где провайдер — `codex-oauth`, `openai`, `openai-compat`, `gemini-oauth`, `gemini` или `anthropic`. Для совместимого API: `/model openai-compat:llama3.3`.
@@ -114,7 +116,7 @@ Claude Code сам делает служебные запросы к `claude-hai
 
 На вкладке «Провайдеры» каждую группу можно отключить: Anthropic (Claude), ChatGPT / Codex, OpenAI API, OpenAI-compatible, Google (Gemini, оба аккаунта и `GEMINI_API_KEY`). Отключённый провайдер:
 - пропадает из UI: аккаунтов, лимитов, списка моделей, настроек и журнала запросов; его лимиты не запрашиваются;
-- не выбирается моделью по умолчанию, когда UI запускает прокси;
+- не может быть выбранной моделью, с которой UI запускает прокси;
 - блокируется прокси: на запрос к нему (например, `/model gemini`) приходит ошибка 400 с подсказкой.
 
 Входы и ключи при этом сохраняются. Список хранится в `CLAUDE_BRIDGE_DISABLED_PROVIDERS` (`anthropic`, `codex`, `openai`, `openai-compat`, `gemini` через запятую) и применяется сразу, без перезапуска.
@@ -173,7 +175,7 @@ UI ищет CLI в таком порядке: рядом со своим исп�
 | `OPENAI_API_KEY`, `GEMINI_API_KEY`, `ANTHROPIC_API_KEY` | ключи для маршрутов по API |
 | `OPENAI_COMPAT_BASE_URL` | адрес OpenAI-совместимого API; `/chat/completions` добавляется автоматически |
 | `OPENAI_COMPAT_API_KEY` | необязательный ключ OpenAI-совместимого API |
-| `OPENAI_COMPAT_DEFAULT_MODEL` | модель, с которой UI запускает совместимый провайдер |
+| `~/.claude-bridge/models.json` | пользовательские модели и модель, выбранная в UI |
 | `CLAUDE_BRIDGE_PORT` | порт прокси, по умолчанию `17870` |
 | `CODEX_REASONING_EFFORT` | усилие Codex, если не указан `@суффикс`; по умолчанию `high` |
 | `CODEX_REASONING_SUMMARY` | `auto` / `concise` / `detailed` / `none` |

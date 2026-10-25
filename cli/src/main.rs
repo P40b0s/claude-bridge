@@ -5,7 +5,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use claude_bridge_core::auth::{self, google, now_ms, openai};
 use claude_bridge_core::launcher::{self, ContextWindow, Launch};
-use claude_bridge_core::{claude_settings, config, control, routing, server, usage};
+use claude_bridge_core::{claude_settings, config, control, models, routing, server, usage};
 
 #[derive(Parser)]
 #[command(name = "claude-bridge", version, about = "Run Claude Code on GPT (Codex), Gemini and other models")]
@@ -379,8 +379,11 @@ fn describe(target: Option<&routing::Target>) -> String {
 
 async fn model_command(model: Option<String>, clear: bool, list: bool) -> anyhow::Result<()> {
     if list {
-        for p in routing::PRESETS {
-            println!("  {:<14} {:<13} {}", p.alias, p.provider.as_str(), p.description);
+        for model in models::list() {
+            let marker = if model.selected { "*" } else { " " };
+            let effort = model.target.reasoning.map(|r| format!("@{}", r.as_str())).unwrap_or_default();
+            let spec = format!("{}:{}{effort}", model.target.provider.as_str(), model.target.model);
+            println!("{marker} {:<28} {}", spec, model.name);
         }
         let efforts: Vec<&str> = routing::EFFORTS.iter().map(|r| r.as_str()).collect();
         println!("\n  Add @effort to any model: {}. Any provider:model works too.", efforts.join(" | "));

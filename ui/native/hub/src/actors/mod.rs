@@ -2,6 +2,7 @@
 
 mod accounts;
 mod geo;
+mod models;
 mod proxy;
 mod settings;
 
@@ -35,6 +36,10 @@ pub async fn create_actors() {
     let settings_context = Context::new();
     let settings_actor = settings::SettingsActor::new(settings_context.address());
     spawn(settings_context.run(settings_actor));
+
+    let models_context = Context::new();
+    let models_actor = models::ModelsActor::new(models_context.address());
+    spawn(models_context.run(models_actor));
 
     let geo_context = Context::new();
     let geo_actor = geo::GeoActor::new(geo_context.address());

@@ -8,9 +8,9 @@ use tokio::task::JoinSet;
 
 use crate::configuration::KNOWN_KEYS;
 use crate::i18n::{self, tr};
-use crate::signals::{ErrorSeverity, ErrorSignal, PresetInfo, SaveSettings, SettingsState};
+use crate::signals::{ErrorSeverity, ErrorSignal, SaveSettings, SettingsState};
 
-/// The .env settings file, plus the model presets the UI offers.
+/// The .env settings file and UI choices.
 pub struct SettingsActor {
     _owned_tasks: JoinSet<()>,
 }
@@ -42,24 +42,10 @@ impl SettingsActor {
             .filter(|k| !values.contains_key(**k) && config::env(k).is_some())
             .map(|k| k.to_string())
             .collect();
-        let presets = routing::PRESETS
-            .iter()
-            .map(|p| {
-                let target = routing::resolve(p.alias, None).expect("every preset must resolve");
-                PresetInfo {
-                    alias: p.alias.into(),
-                    provider: target.provider.as_str().into(),
-                    model: target.model,
-                    reasoning: target.reasoning.map(|r| r.as_str().into()),
-                    description: p.description.into(),
-                }
-            })
-            .collect();
         SettingsState {
             values,
             from_environment,
             file_path: settings::env_file().display().to_string(),
-            presets,
             efforts: routing::EFFORTS
                 .iter()
                 .map(|r| r.as_str().to_string())

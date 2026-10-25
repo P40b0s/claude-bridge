@@ -77,6 +77,8 @@ In Claude Code the model is picked with `/model <name>`. Short names:
 | `gemini`, `gemini-flash`, `gemini-3p`, `gemini-25p`, `gemini-25f` | Gemini through a Google login |
 | `opus`, `anthropic:sonnet`, `anthropic:haiku` | Claude: through Claude Code's login or `ANTHROPIC_API_KEY` |
 
+The **Models** tab shows built-in and custom models together. A new Claude, GPT, Gemini or OpenAI-compatible model can be added without recompiling: set its name, provider, Model ID and optional effort. Custom models and the model selected on the Home page are stored in `~/.claude-bridge/models.json`. Disabling a provider hides its models from the lists without deleting them.
+
 More options:
 - **Effort suffix.** `@low|medium|high|xhigh|max` works with any model, e.g. `/model terra@max` or `/model gemini-flash@low`.
 - **Explicit provider.** `provider:model`, where the provider is `codex-oauth`, `openai`, `openai-compat`, `gemini-oauth`, `gemini` or `anthropic`. For a compatible API: `/model openai-compat:llama3.3`.
@@ -114,7 +116,7 @@ Nothing else in the file changes. `claude-bridge disconnect` (or the same switch
 
 On the "Providers" tab, each group can be turned off: Anthropic (Claude), ChatGPT / Codex, OpenAI API, OpenAI-compatible, Google (Gemini, both accounts and `GEMINI_API_KEY`). A disabled provider:
 - disappears from the UI: accounts, limits, the model list, settings and the request log; its limits are not fetched;
-- is not chosen as the default model when the UI starts the proxy;
+- cannot be the selected model the UI starts the proxy with;
 - is blocked by the proxy: a request to it (say, `/model gemini`) gets a 400 error with a hint.
 
 Logins and keys are kept. The list is stored in `CLAUDE_BRIDGE_DISABLED_PROVIDERS` (comma-separated `anthropic`, `codex`, `openai`, `openai-compat`, `gemini`) and applies immediately, no restart needed.
@@ -173,7 +175,7 @@ Environment variables take precedence over `.env`. After changing settings, rest
 | `OPENAI_API_KEY`, `GEMINI_API_KEY`, `ANTHROPIC_API_KEY` | keys for the API routes |
 | `OPENAI_COMPAT_BASE_URL` | OpenAI-compatible API URL; `/chat/completions` is appended automatically |
 | `OPENAI_COMPAT_API_KEY` | optional OpenAI-compatible API key |
-| `OPENAI_COMPAT_DEFAULT_MODEL` | model used when the UI starts the compatible provider |
+| `~/.claude-bridge/models.json` | custom models and the model selected in the UI |
 | `CLAUDE_BRIDGE_PORT` | proxy port, `17870` by default |
 | `CODEX_REASONING_EFFORT` | Codex effort when no `@suffix` is given; `high` by default |
 | `CODEX_REASONING_SUMMARY` | `auto` / `concise` / `detailed` / `none` |

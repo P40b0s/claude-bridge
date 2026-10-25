@@ -304,7 +304,6 @@ class _OpenAiCompatCard extends StatelessWidget {
     final provider = settings.provider;
     final url = provider.value('OPENAI_COMPAT_BASE_URL');
     final key = provider.value('OPENAI_COMPAT_API_KEY');
-    final model = provider.value('OPENAI_COMPAT_DEFAULT_MODEL');
     final urlFromEnvironment = provider.fromEnvironment(
       'OPENAI_COMPAT_BASE_URL',
     );
@@ -321,7 +320,6 @@ class _OpenAiCompatCard extends StatelessWidget {
           : tr('Адрес не задан', 'No URL'),
       details: [
         if (url.isNotEmpty) 'OPENAI_COMPAT_BASE_URL = $url',
-        if (model.isNotEmpty) 'OPENAI_COMPAT_DEFAULT_MODEL = $model',
         if (urlFromEnvironment)
           tr(
             'OPENAI_COMPAT_BASE_URL задан в переменных окружения',
@@ -339,7 +337,7 @@ class _OpenAiCompatCard extends StatelessWidget {
         'The openai-compat:<model> route for OpenRouter, Ollama, vLLM, LM Studio, DeepSeek and other Chat Completions APIs. The key is optional.',
       ),
       trailing: FilledButton(
-        onPressed: () => _edit(context, url, model, key.isNotEmpty),
+        onPressed: () => _edit(context, url, key.isNotEmpty),
         child: Text(
           connected ? tr('Изменить', 'Edit') : tr('Настроить', 'Configure'),
         ),
@@ -350,11 +348,9 @@ class _OpenAiCompatCard extends StatelessWidget {
   Future<void> _edit(
     BuildContext context,
     String savedUrl,
-    String savedModel,
     bool hasSavedKey,
   ) async {
     final url = TextEditingController(text: savedUrl);
-    final model = TextEditingController(text: savedModel);
     final key = TextEditingController();
     final values = await showDialog<Map<String, String>>(
       context: context,
@@ -371,18 +367,6 @@ class _OpenAiCompatCard extends StatelessWidget {
                 decoration: const InputDecoration(
                   labelText: 'OPENAI_COMPAT_BASE_URL',
                   hintText: 'http://localhost:11434/v1',
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: model,
-                decoration: InputDecoration(
-                  labelText: 'OPENAI_COMPAT_DEFAULT_MODEL',
-                  hintText: 'llama3.3, deepseek-chat, openai/gpt-4o',
-                  helperText: tr(
-                    'Используется при запуске прокси из UI.',
-                    'Used when the UI starts the proxy.',
-                  ),
                 ),
               ),
               const SizedBox(height: 12),
@@ -411,7 +395,6 @@ class _OpenAiCompatCard extends StatelessWidget {
             TextButton(
               onPressed: () => Navigator.pop(context, {
                 'OPENAI_COMPAT_BASE_URL': url.text.trim(),
-                'OPENAI_COMPAT_DEFAULT_MODEL': model.text.trim(),
                 'OPENAI_COMPAT_API_KEY': '',
               }),
               child: Text(tr('Удалить ключ', 'Remove key')),
@@ -422,10 +405,7 @@ class _OpenAiCompatCard extends StatelessWidget {
           ),
           FilledButton(
             onPressed: () {
-              final result = {
-                'OPENAI_COMPAT_BASE_URL': url.text.trim(),
-                'OPENAI_COMPAT_DEFAULT_MODEL': model.text.trim(),
-              };
+              final result = {'OPENAI_COMPAT_BASE_URL': url.text.trim()};
               if (key.text.trim().isNotEmpty) {
                 result['OPENAI_COMPAT_API_KEY'] = key.text.trim();
               }
@@ -437,7 +417,6 @@ class _OpenAiCompatCard extends StatelessWidget {
       ),
     );
     url.dispose();
-    model.dispose();
     key.dispose();
     if (values != null && context.mounted) {
       context.appServices.settingsService.save(values);

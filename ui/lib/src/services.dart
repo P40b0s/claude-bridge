@@ -1,6 +1,7 @@
 import 'package:claude_bridge_ui/src/services/accounts_service.dart';
 import 'package:claude_bridge_ui/src/services/error_service.dart';
 import 'package:claude_bridge_ui/src/services/geo_service.dart';
+import 'package:claude_bridge_ui/src/services/models_service.dart';
 import 'package:claude_bridge_ui/src/services/proxy_service.dart';
 import 'package:claude_bridge_ui/src/services/requests_service.dart';
 import 'package:claude_bridge_ui/src/services/settings_service.dart';
@@ -14,6 +15,7 @@ class AppServices {
   late AccountsService accountsService;
   late RequestsService requestsService;
   late SettingsService settingsService;
+  late ModelsService modelsService;
   late GeoService geoService;
   late TrayService trayService;
   AppServices._() {
@@ -23,6 +25,7 @@ class AppServices {
     accountsService = AccountsService();
     requestsService = RequestsService();
     settingsService = SettingsService();
+    modelsService = ModelsService();
     geoService = GeoService();
   }
 
@@ -38,6 +41,7 @@ class AppServices {
     await accountsService.dispose();
     await requestsService.dispose();
     await settingsService.dispose();
+    await modelsService.dispose();
     await geoService.dispose();
   }
 }

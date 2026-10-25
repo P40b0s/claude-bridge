@@ -65,6 +65,25 @@ pub struct SaveSettings {
     pub values: BTreeMap<String, String>,
 }
 
+#[derive(Deserialize, DartSignal)]
+pub struct SaveModel {
+    pub id: Option<String>,
+    pub name: String,
+    pub provider: String,
+    pub model: String,
+    pub reasoning: Option<String>,
+}
+
+#[derive(Deserialize, DartSignal)]
+pub struct DeleteModel {
+    pub id: String,
+}
+
+#[derive(Deserialize, DartSignal)]
+pub struct SelectModel {
+    pub id: String,
+}
+
 /// Turns the country check on or off and sets the countries it allows (ISO codes).
 #[derive(Deserialize, DartSignal)]
 pub struct SetGeoPolicy {
@@ -291,12 +310,20 @@ pub struct GeoState {
 }
 
 #[derive(Serialize, Clone, SignalPiece)]
-pub struct PresetInfo {
-    pub alias: String,
+pub struct SavedModelInfo {
+    pub id: String,
+    pub name: String,
     pub provider: String,
     pub model: String,
     pub reasoning: Option<String>,
-    pub description: String,
+    pub builtin: bool,
+    pub selected: bool,
+}
+
+#[derive(Serialize, RustSignal)]
+pub struct ModelsState {
+    pub models: Vec<SavedModelInfo>,
+    pub file_path: String,
 }
 
 #[derive(Serialize, RustSignal)]
@@ -306,7 +333,6 @@ pub struct SettingsState {
     /// Keys set only in the process environment (shown as set but not editable here).
     pub from_environment: Vec<String>,
     pub file_path: String,
-    pub presets: Vec<PresetInfo>,
     pub efforts: Vec<String>,
 }
 

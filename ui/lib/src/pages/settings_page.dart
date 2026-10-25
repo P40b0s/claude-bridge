@@ -123,18 +123,6 @@ List<_Group> get _groups => [
       ),
       family: 'openai-compat',
     ),
-    _Field(
-      'OPENAI_COMPAT_DEFAULT_MODEL',
-      tr(
-        'Модель OpenAI-compatible по умолчанию',
-        'Default OpenAI-compatible model',
-      ),
-      hint: tr(
-        'Например llama3.3 или deepseek-chat',
-        'For example llama3.3 or deepseek-chat',
-      ),
-      family: 'openai-compat',
-    ),
   ]),
   _Group(tr('Приложение', 'App'), Icons.desktop_windows_outlined, [
     _Field(

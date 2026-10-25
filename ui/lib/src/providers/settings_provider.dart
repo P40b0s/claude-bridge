@@ -19,7 +19,6 @@ class SettingsProvider extends ChangeNotifier {
   String value(String key) => _state?.values[key] ?? '';
   bool fromEnvironment(String key) =>
       _state?.fromEnvironment.contains(key) ?? false;
-  List<PresetInfo> get presets => _state?.presets ?? const [];
   List<String> get efforts => _state?.efforts ?? const [];
 
   ///Отключённые группы провайдеров: anthropic, codex, openai, gemini

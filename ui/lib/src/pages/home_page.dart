@@ -2,6 +2,7 @@ import 'package:claude_bridge_ui/src/bindings/bindings.dart';
 import 'package:claude_bridge_ui/src/controls/flag.dart';
 import 'package:claude_bridge_ui/src/controls/section_card.dart';
 import 'package:claude_bridge_ui/src/format.dart';
+import 'package:claude_bridge_ui/src/providers/models_provider.dart';
 import 'package:claude_bridge_ui/src/providers/proxy_provider.dart';
 import 'package:claude_bridge_ui/src/services.dart';
 import 'package:flutter/material.dart';
@@ -296,71 +297,114 @@ class ModelCard extends StatefulWidget {
   State<ModelCard> createState() => _ModelCardState();
 }
 
-class _ModelCardState extends State<ModelCard> {
-  final _custom = TextEditingController();
-  String? _preset;
-  String? _effort;
-  bool _selectionInitialized = false;
+class _ModelOption extends StatelessWidget {
+  const _ModelOption({required this.model, this.compact = false});
+  final SavedModelInfo model;
+  final bool compact;
 
   @override
-  void dispose() {
-    _custom.dispose();
-    super.dispose();
-  }
-
-  String? get _spec {
-    final base = _custom.text.trim().isNotEmpty ? _custom.text.trim() : _preset;
-    if (base == null) {
-      return null;
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final detail = model.reasoning == null
+        ? '${model.provider}:${model.model}'
+        : '${model.provider}:${model.model}  •  effort: ${model.reasoning}';
+    final name = theme.textTheme.bodyLarge?.copyWith(
+      fontWeight: FontWeight.w600,
+    );
+    final hint = theme.textTheme.bodySmall?.copyWith(color: theme.hintColor);
+    // The dropdown field leaves room for one line only, so the selected item
+    // shows the name and the spec side by side.
+    if (compact) {
+      return Text.rich(
+        TextSpan(
+          children: [
+            TextSpan(text: model.name, style: name),
+            TextSpan(text: '  $detail', style: hint),
+          ],
+        ),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      );
     }
-    return _effort == null || base.contains('@') ? base : '$base@$_effort';
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            model.name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: name,
+          ),
+          Text(
+            detail,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: hint,
+          ),
+        ],
+      ),
+    );
   }
+}
 
-  void _initializeSelection(List<PresetInfo> presets, ModelInfo? active) {
-    final preset = active == null
+class _ModelCardState extends State<ModelCard> {
+  String? _selectedId;
+  bool _selectionInitialized = false;
+
+  void _initializeSelection(List<SavedModelInfo> models, ModelInfo? active) {
+    final running = active == null
         ? null
-        : presets
+        : models
               .where(
-                (p) => p.provider == active.provider && p.model == active.model,
+                (model) =>
+                    model.provider == active.provider &&
+                    model.model == active.model &&
+                    model.reasoning == active.reasoning,
               )
               .firstOrNull;
+    final selected =
+        running ?? models.where((model) => model.selected).firstOrNull;
     setState(() {
       _selectionInitialized = true;
-      if (active == null) {
-        _preset = presets.firstOrNull?.alias;
-        return;
-      }
-      if (preset == null) {
-        _preset = null;
-        _effort = null;
-        _custom.text = describeModel(active);
-        return;
-      }
-      _preset = preset.alias;
-      _effort = active.reasoning == preset.reasoning ? null : active.reasoning;
+      _selectedId = selected?.id;
     });
+    // The proxy restarts with the saved selection, so it must match what the
+    // dropdown shows.
+    if (selected != null && !selected.selected) {
+      context.appServices.modelsService.select(selected.id);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final proxy = context.appServices.proxyService;
+    final modelsProvider = context.appServices.modelsService.provider;
     final settings = context.appServices.settingsService.provider;
     return ListenableBuilder(
-      listenable: Listenable.merge([proxy.provider, settings]),
+      listenable: Listenable.merge([proxy.provider, modelsProvider, settings]),
       builder: (context, _) {
         final running = proxy.provider.running;
         final pinned = proxy.provider.state?.pinned;
-        final presets = settings.presets
-            .where((p) => settings.providerEnabled(p.provider))
+        final models = modelsProvider.models
+            .where((model) => settings.providerEnabled(model.provider))
             .toList();
         final proxyState = proxy.provider.state;
-        if (!_selectionInitialized &&
-            presets.isNotEmpty &&
-            proxyState != null) {
+        if (!_selectionInitialized && models.isNotEmpty && proxyState != null) {
           WidgetsBinding.instance.addPostFrameCallback(
-            (_) => _initializeSelection(presets, proxyState.active),
+            (_) => _initializeSelection(models, proxyState.active),
           );
         }
+        if (_selectedId != null &&
+            !models.any((model) => model.id == _selectedId)) {
+          _selectedId = null;
+        }
+        final selected = models
+            .where((model) => model.id == _selectedId)
+            .firstOrNull;
+        final spec = selected == null ? null : modelSpec(selected);
         return SectionCard(
           title: tr('Модель для всех сессий', 'Model for all sessions'),
           icon: Icons.swap_horiz,
@@ -379,87 +423,48 @@ class _ModelCardState extends State<ModelCard> {
                       ),
               ),
               const SizedBox(height: 12),
-              Wrap(
-                spacing: 12,
-                runSpacing: 12,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  SizedBox(
-                    width: 320,
-                    child: DropdownButtonFormField<String>(
-                      key: ValueKey(presets.map((p) => p.alias).join(',')),
-                      initialValue: _preset,
-                      isExpanded: true,
-                      decoration: InputDecoration(
-                        labelText: tr('Модель', 'Model'),
-                      ),
-                      items: [
-                        for (final p in presets)
-                          DropdownMenuItem(
-                            value: p.alias,
-                            child: Text(
-                              '${p.alias} — ${p.description}',
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                      ],
-                      onChanged: (v) => setState(() {
-                        _preset = v;
-                        _custom.clear();
-                      }),
-                    ),
+              SizedBox(
+                width: 520,
+                child: DropdownButtonFormField<String>(
+                  key: ValueKey(
+                    '${models.map((model) => model.id).join(',')}:$_selectedId',
                   ),
-                  SizedBox(
-                    width: 260,
-                    child: TextField(
-                      controller: _custom,
-                      decoration: InputDecoration(
-                        labelText: tr('или своя', 'or your own'),
-                        hintText: 'openai:gpt-5.5, terra@max',
+                  initialValue: _selectedId,
+                  isExpanded: true,
+                  menuMaxHeight: 480,
+                  itemHeight: null,
+                  decoration: InputDecoration(labelText: tr('Модель', 'Model')),
+                  selectedItemBuilder: (context) => [
+                    for (final model in models) _ModelOption(model: model, compact: true),
+                  ],
+                  items: [
+                    for (final model in models)
+                      DropdownMenuItem(
+                        value: model.id,
+                        child: _ModelOption(model: model),
                       ),
-                      onChanged: (_) => setState(() {
-                        _preset = null;
-                        _effort = null;
-                      }),
-                    ),
-                  ),
-                  SizedBox(
-                    width: 170,
-                    child: DropdownButtonFormField<String?>(
-                      initialValue: _effort,
-                      isExpanded: true,
-                      decoration: InputDecoration(
-                        labelText: tr('Усилие', 'Effort'),
-                      ),
-                      items: [
-                        DropdownMenuItem(
-                          value: null,
-                          child: Text(
-                            tr('по умолчанию', 'default'),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        for (final e in settings.efforts)
-                          DropdownMenuItem(value: e, child: Text(e)),
-                      ],
-                      onChanged: (v) => setState(() => _effort = v),
-                    ),
-                  ),
-                ],
+                  ],
+                  onChanged: (value) {
+                    setState(() => _selectedId = value);
+                    if (value != null) {
+                      context.appServices.modelsService.select(value);
+                    }
+                  },
+                ),
               ),
               const SizedBox(height: 12),
               Wrap(
                 spacing: 8,
                 children: [
                   FilledButton.icon(
-                    onPressed: running && _spec != null
-                        ? () => proxy.pinModel(_spec!)
+                    onPressed: running && spec != null
+                        ? () => proxy.pinModel(spec)
                         : null,
                     icon: const Icon(Icons.push_pin_outlined),
                     label: Text(
-                      _spec == null
+                      spec == null
                           ? tr('Закрепить', 'Pin')
-                          : tr('Закрепить $_spec', 'Pin $_spec'),
+                          : tr('Закрепить $spec', 'Pin $spec'),
                     ),
                   ),
                   OutlinedButton.icon(
@@ -467,12 +472,7 @@ class _ModelCardState extends State<ModelCard> {
                         ? proxy.unpinModel
                         : null,
                     icon: const Icon(Icons.undo),
-                    label: Text(
-                      tr(
-                        tr('Вернуть /model', 'Back to /model'),
-                        'Back to /model',
-                      ),
-                    ),
+                    label: Text(tr('Вернуть /model', 'Back to /model')),
                   ),
                 ],
               ),

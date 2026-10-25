@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use claude_bridge_core::claude_settings::{self, Connection};
-use claude_bridge_core::{auth, control, families};
+use claude_bridge_core::{control, families, models};
 use futures_util::StreamExt;
 use messages::prelude::{Actor, Address, Context, Notifiable};
 use rinf::RustSignal;
@@ -132,28 +132,28 @@ impl ProxyActor {
         self.events = Some((pid, task));
     }
 
-    /// Proxy default when the UI starts it: the first provider the user can actually use.
-    fn default_model() -> String {
-        let on = |family: &str| !families::is_disabled(family);
-        if on("anthropic")
-            && (auth::claude_code::account().is_some()
-                || configuration::setting("ANTHROPIC_API_KEY").is_some())
-        {
-            "anthropic:claude-opus-5-5".into()
-        } else if on("codex") && auth::openai::load().is_some() {
-            "codex-oauth:gpt-5.6-sol".into()
-        } else if on("gemini") && auth::google::load(1).is_some() {
-            "gemini-oauth:gemini-3.1-pro-preview".into()
-        } else if on("gemini") && configuration::setting("GEMINI_API_KEY").is_some() {
-            "gemini:gemini-3.1-pro-preview".into()
-        } else if on("openai-compat")
-            && configuration::setting("OPENAI_COMPAT_BASE_URL").is_some()
-            && let Some(model) = configuration::setting("OPENAI_COMPAT_DEFAULT_MODEL")
-        {
-            format!("openai-compat:{model}")
-        } else {
-            "openai:gpt-5.5".into()
-        }
+    /// Proxy default when the UI starts it: the model selected on the Home page.
+    fn default_model() -> anyhow::Result<String> {
+        let target = models::selected()
+            .filter(|target| !families::provider_disabled(target.provider))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    tr(
+                        "Модель не выбрана: выберите её на главной странице",
+                        "No model selected: choose one on the Home page"
+                    )
+                    .to_string()
+                )
+            })?;
+        Ok(format!(
+            "{}:{}{}",
+            target.provider.as_str(),
+            target.model,
+            target
+                .reasoning
+                .map(|r| format!("@{}", r.as_str()))
+                .unwrap_or_default(),
+        ))
     }
 
     async fn run_command(&mut self, action: ProxyAction) -> anyhow::Result<()> {
@@ -178,7 +178,7 @@ impl ProxyActor {
                 })?;
                 let restart = matches!(action, ProxyAction::Restart);
                 let pinned = control::health(port).await.and_then(|h| h.pinned);
-                let default_model = Self::default_model();
+                let default_model = Self::default_model()?;
                 let health = control::ensure_proxy(&cli, port, &default_model, restart).await?;
                 // A restart should not silently drop the model the user pinned.
                 if restart && let Some(pinned) = pinned {

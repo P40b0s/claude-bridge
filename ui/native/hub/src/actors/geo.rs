@@ -34,7 +34,13 @@ impl GeoActor {
         owned_tasks.spawn(super::forward::<SetGeoPolicy, _>(self_addr.clone()));
         owned_tasks.spawn(super::forward::<RefreshLocation, _>(self_addr.clone()));
         owned_tasks.spawn(Self::poll_timer(self_addr.clone()));
-        let countries = geo::COUNTRIES.iter().map(|(code, name)| CountryInfo { code: code.to_string(), name: name.to_string() }).collect();
+        let countries = geo::COUNTRIES
+            .iter()
+            .map(|(code, name)| CountryInfo {
+                code: code.to_string(),
+                name: name.to_string(),
+            })
+            .collect();
         let state = GeoState {
             ip: None,
             country_code: None,
@@ -46,7 +52,12 @@ impl GeoActor {
             allowed: Vec::new(),
             countries,
         };
-        Self { http: server::http_client().ok(), self_addr, state, _owned_tasks: owned_tasks }
+        Self {
+            http: server::http_client().ok(),
+            self_addr,
+            state,
+            _owned_tasks: owned_tasks,
+        }
     }
 
     async fn poll_timer(mut self_addr: Address<Self>) {
@@ -72,7 +83,13 @@ impl GeoActor {
             return;
         }
         let Some(http) = self.http.clone() else {
-            self.state.error = Some(tr("не удалось создать HTTP-клиент", "cannot create an HTTP client").into());
+            self.state.error = Some(
+                tr(
+                    "не удалось создать HTTP-клиент",
+                    "cannot create an HTTP client",
+                )
+                .into(),
+            );
             self.send_state();
             return;
         };
@@ -89,7 +106,11 @@ impl GeoActor {
 /// The services' own errors, after core's "location lookup failed" prefix.
 fn detail(e: &anyhow::Error) -> String {
     let text = format!("{e:#}");
-    format!(": {}", text.strip_prefix("location lookup failed: ").unwrap_or(&text))
+    format!(
+        ": {}",
+        text.strip_prefix("location lookup failed: ")
+            .unwrap_or(&text)
+    )
 }
 
 #[async_trait]
@@ -118,7 +139,16 @@ impl Notifiable<Located> for GeoActor {
                 self.state.checked_at = Some(auth::now_ms());
                 self.state.error = None;
             }
-            Err(e) => self.state.error = Some(tr("Не удалось определить местоположение", "Location lookup failed").to_string() + &detail(&e)),
+            Err(e) => {
+                self.state.error = Some(
+                    tr(
+                        "Не удалось определить местоположение",
+                        "Location lookup failed",
+                    )
+                    .to_string()
+                        + &detail(&e),
+                )
+            }
         }
         self.send_state();
     }
@@ -133,8 +163,14 @@ impl Notifiable<SetGeoPolicy> for GeoActor {
             .filter(|code| msg.allowed.iter().any(|a| a.eq_ignore_ascii_case(code)))
             .collect();
         let updates = BTreeMap::from([
-            (geo::ENABLED_KEY.to_string(), Some(if msg.enabled { "1" } else { "0" }.to_string())),
-            (geo::ALLOWED_KEY.to_string(), Some(geo::format_list(&allowed))),
+            (
+                geo::ENABLED_KEY.to_string(),
+                Some(if msg.enabled { "1" } else { "0" }.to_string()),
+            ),
+            (
+                geo::ALLOWED_KEY.to_string(),
+                Some(geo::format_list(&allowed)),
+            ),
         ]);
         if let Err(e) = settings::write(&updates) {
             ErrorSignal::error(&e);

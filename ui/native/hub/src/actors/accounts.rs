@@ -11,8 +11,9 @@ use tokio::task::{JoinHandle, JoinSet};
 
 use crate::i18n::tr;
 use crate::signals::{
-    AccountsState, AuthProvider, CancelLogin, ChatGptAccount, ClaudeCodeAccount, ErrorSeverity, ErrorSignal, GoogleAccount,
-    LoginPhase, LoginRequest, LoginState, LogoutRequest, RefreshUsage, Usage, UsageState, UsageWindow,
+    AccountsState, AuthProvider, CancelLogin, ChatGptAccount, ClaudeCodeAccount, ErrorSeverity,
+    ErrorSignal, GoogleAccount, LoginPhase, LoginRequest, LoginState, LogoutRequest, RefreshUsage,
+    Usage, UsageState, UsageWindow,
 };
 
 /// Token expiry shown in the UI moves; resend now and then.
@@ -40,8 +41,21 @@ pub struct LoginFinished {
     result: Result<String, String>,
 }
 
-fn login_state(provider: AuthProvider, account: i32, phase: LoginPhase, url: Option<String>, message: Option<String>) {
-    LoginState { provider, account, phase, url, message }.send_signal_to_dart();
+fn login_state(
+    provider: AuthProvider,
+    account: i32,
+    phase: LoginPhase,
+    url: Option<String>,
+    message: Option<String>,
+) {
+    LoginState {
+        provider,
+        account,
+        phase,
+        url,
+        message,
+    }
+    .send_signal_to_dart();
 }
 
 impl AccountsActor {
@@ -53,7 +67,13 @@ impl AccountsActor {
         owned_tasks.spawn(super::forward::<RefreshUsage, _>(self_addr.clone()));
         owned_tasks.spawn(Self::refresh_timer(self_addr.clone()));
         Self::send_state();
-        Self { self_addr, google_auth: Arc::default(), usage: None, login: None, _owned_tasks: owned_tasks }
+        Self {
+            self_addr,
+            google_auth: Arc::default(),
+            usage: None,
+            login: None,
+            _owned_tasks: owned_tasks,
+        }
     }
 
     async fn refresh_timer(mut self_addr: Address<Self>) {
@@ -84,15 +104,19 @@ impl AccountsActor {
                 })
             })
             .collect();
-        let claude_code = auth::claude_code::account()
-            .map(|a| ClaudeCodeAccount {
-                email: a.email,
-                organization: a.organization,
-                plan: a.plan,
-                billing: a.billing,
-                subscription_since: a.subscription_since,
-            });
-        AccountsState { claude_code, chatgpt, google }.send_signal_to_dart();
+        let claude_code = auth::claude_code::account().map(|a| ClaudeCodeAccount {
+            email: a.email,
+            organization: a.organization,
+            plan: a.plan,
+            billing: a.billing,
+            subscription_since: a.subscription_since,
+        });
+        AccountsState {
+            claude_code,
+            chatgpt,
+            google,
+        }
+        .send_signal_to_dart();
     }
 
     fn refresh_usage(&mut self) {
@@ -101,16 +125,30 @@ impl AccountsActor {
         }
         let google_auth = self.google_auth.clone();
         self.usage = Some(tokio::spawn(async move {
-            let Ok(http) = server::http_client() else { return };
+            let Ok(http) = server::http_client() else {
+                return;
+            };
             // Disabled providers are not asked: a broken login there should stay out of sight.
             let gemini = futures_util::future::join_all(
                 (1..=2u8)
-                    .filter(|&account| !families::is_disabled("gemini") && auth::google::load(account).is_some())
+                    .filter(|&account| {
+                        !families::is_disabled("gemini") && auth::google::load(account).is_some()
+                    })
                     .map(|account| usage::gemini(&http, &google_auth, account)),
             );
-            let codex = async { if families::is_disabled("codex") { None } else { usage::codex(&http).await } };
+            let codex = async {
+                if families::is_disabled("codex") {
+                    None
+                } else {
+                    usage::codex(&http).await
+                }
+            };
             let (codex, gemini) = tokio::join!(codex, gemini);
-            let claude = if families::is_disabled("anthropic") { None } else { usage::load_claude() };
+            let claude = if families::is_disabled("anthropic") {
+                None
+            } else {
+                usage::load_claude()
+            };
             // Reading Gemini limits may have refreshed a Google token; show its new expiry.
             Self::send_state();
             UsageState {
@@ -130,7 +168,13 @@ impl AccountsActor {
         let task = tokio::spawn(async move {
             let on_url = move |url: &str| {
                 auth::open_browser(url);
-                login_state(provider, account, LoginPhase::Waiting, Some(url.to_string()), None);
+                login_state(
+                    provider,
+                    account,
+                    LoginPhase::Waiting,
+                    Some(url.to_string()),
+                    None,
+                );
             };
             let result = async {
                 let http = server::http_client()?;
@@ -141,11 +185,19 @@ impl AccountsActor {
                         auth::google::login(&http, slot, on_url).await?.email
                     }
                 };
-                anyhow::Ok(who.unwrap_or_else(|| tr("неизвестный аккаунт", "unknown account").into()))
+                anyhow::Ok(
+                    who.unwrap_or_else(|| tr("неизвестный аккаунт", "unknown account").into()),
+                )
             }
             .await
             .map_err(|e| format!("{e:#}"));
-            let _ = addr.notify(LoginFinished { provider, account, result }).await;
+            let _ = addr
+                .notify(LoginFinished {
+                    provider,
+                    account,
+                    result,
+                })
+                .await;
         });
         self.login = Some((provider, account, task));
     }
@@ -189,12 +241,30 @@ impl Notifiable<LoginFinished> for AccountsActor {
         self.login = None;
         match msg.result {
             Ok(who) => {
-                login_state(msg.provider, msg.account, LoginPhase::Succeeded, None, Some(who.clone()));
-                ErrorSignal::send(ErrorSeverity::Success, format!("{}: {who}", tr("Вход выполнен", "Logged in")));
+                login_state(
+                    msg.provider,
+                    msg.account,
+                    LoginPhase::Succeeded,
+                    None,
+                    Some(who.clone()),
+                );
+                ErrorSignal::send(
+                    ErrorSeverity::Success,
+                    format!("{}: {who}", tr("Вход выполнен", "Logged in")),
+                );
             }
             Err(e) => {
-                login_state(msg.provider, msg.account, LoginPhase::Failed, None, Some(e.clone()));
-                ErrorSignal::send(ErrorSeverity::Error, format!("{}: {e}", tr("Вход не удался", "Login failed")));
+                login_state(
+                    msg.provider,
+                    msg.account,
+                    LoginPhase::Failed,
+                    None,
+                    Some(e.clone()),
+                );
+                ErrorSignal::send(
+                    ErrorSeverity::Error,
+                    format!("{}: {e}", tr("Вход не удался", "Login failed")),
+                );
             }
         }
         Self::send_state();
