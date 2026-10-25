@@ -1,0 +1,24 @@
+[package]
+name = "claude-bridge-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+axum = "0.8.9"
+base64 = "0.23.1"
+bytes = "1.12.1"
+dirs = "7.0.0"
+dotenvy = "0.15.7"
+eventsource-stream = "0.2.3"
+futures-util = "0.3.34"
+rand = "0.10.3"
+reqwest = { version = "0.13.5", features = ["form", "json", "stream"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.154", features = ["preserve_order"] }
+sha2 = "0.11.1"
+tokio = { version = "1.54.1", features = ["full"] }
+tokio-stream = { version = "0.1.19", features = ["sync"] }
+tracing = "0.1.44"
+url = "2.5.8"
+uuid = { version = "1.29.0", features = ["v4"] }

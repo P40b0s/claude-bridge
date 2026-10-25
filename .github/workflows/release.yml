@@ -1,0 +1,172 @@
+# Builds the CLI and the UI for Linux, macOS and Windows and publishes them as a
+# GitHub release named after the tag. Push a tag such as `v0.2.0`; it must match
+# the version in cli/Cargo.toml.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)build, e.g. v0.2.0"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  FLUTTER_VERSION: "3.47.7"
+  RINF_CLI_VERSION: "8.11.0"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - id: v
+        name: Check tag against cli/Cargo.toml
+        shell: bash
+        run: |
+          tag="${{ inputs.tag || github.ref_name }}"
+          version="${tag#v}"
+          crate=$(sed -n 's/^version = "\(.*\)"/\1/p' cli/Cargo.toml | head -1)
+          if [ "$version" != "$crate" ]; then
+            echo "::error::tag $tag does not match cli/Cargo.toml version $crate"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            runner: ubuntu-22.04
+          - os: macos
+            runner: macos-latest
+          - os: windows
+            runner: windows-latest
+    runs-on: ${{ matrix.runner }}
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+
+      - name: Linux build dependencies
+        if: matrix.os == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          # The macOS app and CLI are universal binaries.
+          targets: ${{ matrix.os == 'macos' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Install rinf CLI
+        run: cargo install rinf_cli --version "$RINF_CLI_VERSION" --locked
+
+      # The Dart bindings are generated, not committed.
+      - name: Generate Dart bindings
+        working-directory: ui
+        run: |
+          flutter pub get
+          rinf gen
+
+      - name: Build CLI
+        run: |
+          if [ "${{ matrix.os }}" = macos ]; then
+            cargo build --release -p claude-bridge --target aarch64-apple-darwin
+            cargo build --release -p claude-bridge --target x86_64-apple-darwin
+            mkdir -p target/release
+            lipo -create -output target/release/claude-bridge \
+              target/aarch64-apple-darwin/release/claude-bridge \
+              target/x86_64-apple-darwin/release/claude-bridge
+          else
+            cargo build --release -p claude-bridge
+          fi
+
+      - name: Build UI
+        working-directory: ui
+        run: flutter build ${{ matrix.os }} --release --build-name "$VERSION"
+
+      # The UI looks for the CLI next to its own executable, so it ships inside the bundle.
+      - name: Package
+        run: |
+          mkdir -p dist
+          case "${{ matrix.os }}" in
+            linux)
+              bundle=ui/build/linux/x64/release/bundle
+              cp target/release/claude-bridge "$bundle/"
+              tar -C "$bundle" -czf "dist/claude-bridge-$VERSION-linux-x64.tar.gz" .
+              tar -C target/release -czf "dist/claude-bridge-cli-$VERSION-linux-x64.tar.gz" claude-bridge
+              ;;
+            macos)
+              app=ui/build/macos/Build/Products/Release/claude_bridge_ui.app
+              cp target/release/claude-bridge "$app/Contents/MacOS/"
+              # Adding a binary invalidates the bundle signature; re-sign ad hoc.
+              codesign --force --deep --sign - "$app"
+              ditto -c -k --keepParent "$app" "dist/claude-bridge-$VERSION-macos-universal.zip"
+              tar -C target/release -czf "dist/claude-bridge-cli-$VERSION-macos-universal.tar.gz" claude-bridge
+              ;;
+            windows)
+              bundle=ui/build/windows/x64/runner/Release
+              cp target/release/claude-bridge.exe "$bundle/"
+              7z a -tzip "dist/claude-bridge-$VERSION-windows-x64.zip" "./$bundle/*"
+              7z a -tzip "dist/claude-bridge-cli-$VERSION-windows-x64.zip" ./target/release/claude-bridge.exe
+              ;;
+          esac
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.os }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum * > SHA256SUMS.txt
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.version.outputs.tag }}
+          name: ${{ needs.version.outputs.version }}
+          generate_release_notes: true
+          files: dist/*

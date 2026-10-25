@@ -1,0 +1,34 @@
+[package]
+# Do not change the name of this crate.
+name = "hub"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+# `lib` is required for non-library targets,
+# such as tests and benchmarks.
+# `cdylib` is for Linux, Android, Windows, and web.
+# `staticlib` is for iOS and macOS.
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+wildcard_imports = "deny"
+
+[dependencies]
+claude-bridge-core = { path = "../../../core" }
+rinf = "8.11.0"
+serde = { version = "1.0.229", features = ["derive"] }
+tokio = { version = "1.54.1", features = ["rt", "macros", "time", "sync"] }
+async-trait = "0.1.89"
+messages = "0.3.1"
+futures-util = "0.3.34"
+anyhow = "1.0.104"
+reqwest = "0.13.5"
+tracing = "0.1.44"
+tracing-subscriber = "0.3.23"
+
+# Uncomment below to target the web.
+# tokio_with_wasm = { version = "0.8.5", features = ["rt", "macros", "time"] }
+# wasm-bindgen = "0.2.100"
