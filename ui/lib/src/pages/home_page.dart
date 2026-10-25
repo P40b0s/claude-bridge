@@ -8,37 +8,28 @@ import 'package:flutter/material.dart';
 import 'package:claude_bridge_ui/src/i18n.dart';
 
 ///Главная: прокси, подключение Claude Code и модель для всех сессий
-class HomePage extends StatelessWidget
-{
+class HomePage extends StatelessWidget {
   const HomePage({super.key});
 
   @override
-  Widget build(BuildContext context)
-  {
+  Widget build(BuildContext context) {
     return ListView(
       padding: const EdgeInsets.all(24),
-      children: const [
-        LocationCard(),
-        ProxyCard(),
-        ModelCard(),
-      ],
+      children: const [LocationCard(), ProxyCard(), ModelCard()],
     );
   }
 }
 
 ///Откуда сейчас уходит трафик: IP, страна и разрешено ли из неё проксирование
-class LocationCard extends StatelessWidget
-{
+class LocationCard extends StatelessWidget {
   const LocationCard({super.key});
 
   @override
-  Widget build(BuildContext context)
-  {
+  Widget build(BuildContext context) {
     final service = context.appServices.geoService;
     return ListenableBuilder(
       listenable: service.provider,
-      builder: (context, _)
-      {
+      builder: (context, _) {
         final geo = service.provider;
         final state = geo.state;
         final theme = Theme.of(context);
@@ -65,7 +56,10 @@ class LocationCard extends StatelessWidget
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text('${countryName(state.countryCode!, state.country ?? '')} (${state.countryCode})', style: theme.textTheme.titleMedium),
+                                Text(
+                                  '${countryName(state.countryCode!, state.country ?? '')} (${state.countryCode})',
+                                  style: theme.textTheme.titleMedium,
+                                ),
                                 SelectableText('IP ${state.ip}'),
                               ],
                             ),
@@ -75,7 +69,10 @@ class LocationCard extends StatelessWidget
                     if (state.error != null)
                       Padding(
                         padding: EdgeInsets.only(top: hasLocation ? 8 : 0),
-                        child: Text(state.error!, style: TextStyle(color: theme.colorScheme.error)),
+                        child: Text(
+                          state.error!,
+                          style: TextStyle(color: theme.colorScheme.error),
+                        ),
                       ),
                     if (state.enabled)
                       Padding(
@@ -83,18 +80,31 @@ class LocationCard extends StatelessWidget
                         child: Row(
                           children: [
                             Icon(
-                              geo.blocking ? Icons.block : Icons.check_circle_outline,
+                              geo.blocking
+                                  ? Icons.block
+                                  : Icons.check_circle_outline,
                               size: 18,
-                              color: geo.blocking ? theme.colorScheme.error : Colors.green,
+                              color: geo.blocking
+                                  ? theme.colorScheme.error
+                                  : Colors.green,
                             ),
                             const SizedBox(width: 8),
                             Expanded(
                               child: Text(
                                 geo.blocking
                                     ? (hasLocation
-                                        ? tr('Страны нет в списке разрешённых: запросы через прокси блокируются.', 'The country is not allowed: requests through the proxy are blocked.')
-                                        : tr('Страна не определена: запросы через прокси блокируются.', 'The country is unknown: requests through the proxy are blocked.'))
-                                    : tr('Страна в списке разрешённых: проксирование работает.', 'The country is allowed: proxying works.'),
+                                          ? tr(
+                                              'Страны нет в списке разрешённых: запросы через прокси блокируются.',
+                                              'The country is not allowed: requests through the proxy are blocked.',
+                                            )
+                                          : tr(
+                                              'Страна не определена: запросы через прокси блокируются.',
+                                              'The country is unknown: requests through the proxy are blocked.',
+                                            ))
+                                    : tr(
+                                        'Страна в списке разрешённых: проксирование работает.',
+                                        'The country is allowed: proxying works.',
+                                      ),
                               ),
                             ),
                           ],
@@ -108,18 +118,15 @@ class LocationCard extends StatelessWidget
   }
 }
 
-class ProxyCard extends StatelessWidget
-{
+class ProxyCard extends StatelessWidget {
   const ProxyCard({super.key});
 
   @override
-  Widget build(BuildContext context)
-  {
+  Widget build(BuildContext context) {
     final service = context.appServices.proxyService;
     return ListenableBuilder(
       listenable: service.provider,
-      builder: (context, _)
-      {
+      builder: (context, _) {
         final state = service.provider.state;
         final running = service.provider.running;
         final busy = service.provider.busy || state == null;
@@ -131,7 +138,9 @@ class ProxyCard extends StatelessWidget
             children: [
               if (!running)
                 FilledButton.icon(
-                  onPressed: busy || state.cliPath == null ? null : service.start,
+                  onPressed: busy || state.cliPath == null
+                      ? null
+                      : service.start,
                   icon: const Icon(Icons.play_arrow),
                   label: Text(tr(tr('Запустить', 'Start'), 'Start')),
                 ),
@@ -154,23 +163,70 @@ class ProxyCard extends StatelessWidget
               : Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _Line(tr('Адрес', 'Address'), 'http://127.0.0.1:${state.port}'),
-                    _Line(tr('Состояние', 'State'), running ? tr('работает, PID ${state.pid}, ${formatUptime(state.startedAt ?? 0)}', 'running, PID ${state.pid}, ${formatUptime(state.startedAt ?? 0)}') : tr('остановлен', 'stopped')),
-                    if (running) _Line(tr('Последняя модель', 'Last model'), describeModel(state.active)),
-                    _Line('CLI', state.cliPath ?? tr('не найден: укажите путь к claude-bridge в настройках', 'not found: set the path to claude-bridge in the settings')),
+                    _Line(
+                      tr('Адрес', 'Address'),
+                      'http://127.0.0.1:${state.port}',
+                    ),
+                    _Line(
+                      tr('Состояние', 'State'),
+                      running
+                          ? tr(
+                              'работает, PID ${state.pid}, ${formatUptime(state.startedAt ?? 0)}',
+                              'running, PID ${state.pid}, ${formatUptime(state.startedAt ?? 0)}',
+                            )
+                          : tr('остановлен', 'stopped'),
+                    ),
+                    if (running)
+                      _Line(
+                        tr('Последняя модель', 'Last model'),
+                        describeModel(state.active),
+                      ),
+                    _Line(
+                      'CLI',
+                      state.cliPath ??
+                          tr(
+                            'не найден: укажите путь к claude-bridge в настройках',
+                            'not found: set the path to claude-bridge in the settings',
+                          ),
+                    ),
                     const Divider(height: 24),
                     SwitchListTile(
                       contentPadding: EdgeInsets.zero,
                       value: state.autostart,
-                      onChanged: (v) => context.appServices.settingsService.save({'CLAUDE_BRIDGE_AUTOSTART': v ? '' : '0'}),
-                      title: Text(tr(tr('Запускать прокси вместе с приложением', 'Start the proxy with the app'), 'Start the proxy with the app')),
-                      subtitle: Text(tr(tr('Прокси работает в фоне и после закрытия приложения; остановить его можно здесь или claude-bridge stop.', 'The proxy keeps running in the background after the app closes; stop it here or with claude-bridge stop.'), 'The proxy keeps running in the background after the app closes; stop it here or with claude-bridge stop.')),
+                      onChanged: (v) => context.appServices.settingsService
+                          .save({'CLAUDE_BRIDGE_AUTOSTART': v ? '' : '0'}),
+                      title: Text(
+                        tr(
+                          tr(
+                            'Запускать прокси вместе с приложением',
+                            'Start the proxy with the app',
+                          ),
+                          'Start the proxy with the app',
+                        ),
+                      ),
+                      subtitle: Text(
+                        tr(
+                          tr(
+                            'Прокси работает в фоне и после закрытия приложения; остановить его можно здесь или claude-bridge stop.',
+                            'The proxy keeps running in the background after the app closes; stop it here or with claude-bridge stop.',
+                          ),
+                          'The proxy keeps running in the background after the app closes; stop it here or with claude-bridge stop.',
+                        ),
+                      ),
                     ),
                     SwitchListTile(
                       contentPadding: EdgeInsets.zero,
                       value: state.claudeCodeConnected,
                       onChanged: (v) => service.connectClaudeCode(v),
-                      title: Text(tr(tr('Любой claude через прокси', 'Any claude through the proxy'), 'Any claude through the proxy')),
+                      title: Text(
+                        tr(
+                          tr(
+                            'Любой claude через прокси',
+                            'Any claude through the proxy',
+                          ),
+                          'Any claude through the proxy',
+                        ),
+                      ),
                       subtitle: Text(_connectionHint(state, running)),
                     ),
                   ],
@@ -181,37 +237,50 @@ class ProxyCard extends StatelessWidget
   }
 }
 
-String _connectionHint(ProxyState state, bool running)
-{
-  if (state.claudeCodeConnected)
-  {
-    final warning = running ? '' : tr(' Прокси остановлен: пока он не запущен, claude не будет отвечать.', ' The proxy is stopped: claude will not answer until it runs.');
-    return tr('Адрес прокси прописан в ${state.claudeCodeSettings}, так что через него идёт и обычный claude, и расширения для IDE.$warning',
-        'The proxy address is in ${state.claudeCodeSettings}, so plain claude and IDE extensions go through it too.$warning');
+String _connectionHint(ProxyState state, bool running) {
+  if (state.claudeCodeConnected) {
+    final warning = running
+        ? ''
+        : tr(
+            ' Прокси остановлен: пока он не запущен, claude не будет отвечать.',
+            ' The proxy is stopped: claude will not answer until it runs.',
+          );
+    return tr(
+      'Адрес прокси прописан в ${state.claudeCodeSettings}, так что через него идёт и обычный claude, и расширения для IDE.$warning',
+      'The proxy address is in ${state.claudeCodeSettings}, so plain claude and IDE extensions go through it too.$warning',
+    );
   }
-  if (state.claudeCodeOtherUrl != null)
-  {
-    return tr('Сейчас в ${state.claudeCodeSettings} указан другой адрес: ${state.claudeCodeOtherUrl}. Включение заменит его.', '${state.claudeCodeSettings} points at another address: ${state.claudeCodeOtherUrl}. Turning this on replaces it.');
+  if (state.claudeCodeOtherUrl != null) {
+    return tr(
+      'Сейчас в ${state.claudeCodeSettings} указан другой адрес: ${state.claudeCodeOtherUrl}. Включение заменит его.',
+      '${state.claudeCodeSettings} points at another address: ${state.claudeCodeOtherUrl}. Turning this on replaces it.',
+    );
   }
-  return tr('Выключено: через прокси идут только сессии, запущенные через claude-bridge codex, gemini и т. д. Включение пропишет адрес прокси в ${state.claudeCodeSettings}.',
-      'Off: only sessions started with claude-bridge codex, gemini etc. use the proxy. Turning this on writes the proxy address to ${state.claudeCodeSettings}.');
+  return tr(
+    'Выключено: через прокси идут только сессии, запущенные через claude-bridge codex, gemini и т. д. Включение пропишет адрес прокси в ${state.claudeCodeSettings}.',
+    'Off: only sessions started with claude-bridge codex, gemini etc. use the proxy. Turning this on writes the proxy address to ${state.claudeCodeSettings}.',
+  );
 }
 
-class _Line extends StatelessWidget
-{
+class _Line extends StatelessWidget {
   const _Line(this.label, this.value);
   final String label;
   final String value;
 
   @override
-  Widget build(BuildContext context)
-  {
+  Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 3),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SizedBox(width: 160, child: Text(label, style: TextStyle(color: Theme.of(context).hintColor))),
+          SizedBox(
+            width: 160,
+            child: Text(
+              label,
+              style: TextStyle(color: Theme.of(context).hintColor),
+            ),
+          ),
           Expanded(child: SelectableText(value)),
         ],
       ),
@@ -220,53 +289,77 @@ class _Line extends StatelessWidget
 }
 
 ///Переключение модели всех сессий на лету
-class ModelCard extends StatefulWidget
-{
+class ModelCard extends StatefulWidget {
   const ModelCard({super.key});
 
   @override
   State<ModelCard> createState() => _ModelCardState();
 }
 
-class _ModelCardState extends State<ModelCard>
-{
+class _ModelCardState extends State<ModelCard> {
   final _custom = TextEditingController();
-  String? _preset = 'opus';
+  String? _preset;
   String? _effort;
+  bool _selectionInitialized = false;
 
   @override
-  void dispose()
-  {
+  void dispose() {
     _custom.dispose();
     super.dispose();
   }
 
-  String? get _spec
-  {
+  String? get _spec {
     final base = _custom.text.trim().isNotEmpty ? _custom.text.trim() : _preset;
-    if (base == null)
-    {
+    if (base == null) {
       return null;
     }
     return _effort == null || base.contains('@') ? base : '$base@$_effort';
   }
 
+  void _initializeSelection(List<PresetInfo> presets, ModelInfo? active) {
+    final preset = active == null
+        ? null
+        : presets
+              .where(
+                (p) => p.provider == active.provider && p.model == active.model,
+              )
+              .firstOrNull;
+    setState(() {
+      _selectionInitialized = true;
+      if (active == null) {
+        _preset = presets.firstOrNull?.alias;
+        return;
+      }
+      if (preset == null) {
+        _preset = null;
+        _effort = null;
+        _custom.text = describeModel(active);
+        return;
+      }
+      _preset = preset.alias;
+      _effort = active.reasoning == preset.reasoning ? null : active.reasoning;
+    });
+  }
+
   @override
-  Widget build(BuildContext context)
-  {
+  Widget build(BuildContext context) {
     final proxy = context.appServices.proxyService;
     final settings = context.appServices.settingsService.provider;
     return ListenableBuilder(
       listenable: Listenable.merge([proxy.provider, settings]),
-      builder: (context, _)
-      {
+      builder: (context, _) {
         final running = proxy.provider.running;
         final pinned = proxy.provider.state?.pinned;
-        final presets = settings.presets.where((p) => settings.providerEnabled(p.provider)).toList();
-        //Пресет отключённого провайдера не может остаться выбранным
-        if (_custom.text.trim().isEmpty && !presets.any((p) => p.alias == _preset))
-        {
-          _preset = presets.firstOrNull?.alias;
+        final presets = settings.presets
+            .where((p) => settings.providerEnabled(p.provider))
+            .toList();
+        final proxyState = proxy.provider.state;
+        if (!_selectionInitialized &&
+            presets.isNotEmpty &&
+            proxyState != null) {
+          WidgetsBinding.instance.addPostFrameCallback(
+            (_) => _initializeSelection(presets, proxyState.active),
+          );
         }
         return SectionCard(
           title: tr('Модель для всех сессий', 'Model for all sessions'),
@@ -276,8 +369,14 @@ class _ModelCardState extends State<ModelCard>
             children: [
               Text(
                 pinned == null
-                    ? tr('Сейчас каждая сессия использует модель, выбранную в ней через /model.', 'Each session uses the model picked in it with /model.')
-                    : tr('Все запросы идут на ${describeModel(pinned)}. /model в Claude Code игнорируется, пока модель закреплена.', 'All requests go to ${describeModel(pinned)}. /model in Claude Code is ignored while a model is pinned.'),
+                    ? tr(
+                        'Сейчас каждая сессия использует модель, выбранную в ней через /model.',
+                        'Each session uses the model picked in it with /model.',
+                      )
+                    : tr(
+                        'Все запросы идут на ${describeModel(pinned)}. /model в Claude Code игнорируется, пока модель закреплена.',
+                        'All requests go to ${describeModel(pinned)}. /model in Claude Code is ignored while a model is pinned.',
+                      ),
               ),
               const SizedBox(height: 12),
               Wrap(
@@ -291,20 +390,37 @@ class _ModelCardState extends State<ModelCard>
                       key: ValueKey(presets.map((p) => p.alias).join(',')),
                       initialValue: _preset,
                       isExpanded: true,
-                      decoration: InputDecoration(labelText: tr('Модель', 'Model')),
+                      decoration: InputDecoration(
+                        labelText: tr('Модель', 'Model'),
+                      ),
                       items: [
                         for (final p in presets)
-                          DropdownMenuItem(value: p.alias, child: Text('${p.alias} — ${p.description}', overflow: TextOverflow.ellipsis)),
+                          DropdownMenuItem(
+                            value: p.alias,
+                            child: Text(
+                              '${p.alias} — ${p.description}',
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
                       ],
-                      onChanged: (v) => setState(() => _preset = v),
+                      onChanged: (v) => setState(() {
+                        _preset = v;
+                        _custom.clear();
+                      }),
                     ),
                   ),
                   SizedBox(
                     width: 260,
                     child: TextField(
                       controller: _custom,
-                      decoration: InputDecoration(labelText: tr('или своя', 'or your own'), hintText: 'openai:gpt-5.5, terra@max'),
-                      onChanged: (_) => setState(() {}),
+                      decoration: InputDecoration(
+                        labelText: tr('или своя', 'or your own'),
+                        hintText: 'openai:gpt-5.5, terra@max',
+                      ),
+                      onChanged: (_) => setState(() {
+                        _preset = null;
+                        _effort = null;
+                      }),
                     ),
                   ),
                   SizedBox(
@@ -312,10 +428,19 @@ class _ModelCardState extends State<ModelCard>
                     child: DropdownButtonFormField<String?>(
                       initialValue: _effort,
                       isExpanded: true,
-                      decoration: InputDecoration(labelText: tr('Усилие', 'Effort')),
+                      decoration: InputDecoration(
+                        labelText: tr('Усилие', 'Effort'),
+                      ),
                       items: [
-                        DropdownMenuItem(value: null, child: Text(tr('по умолчанию', 'default'), overflow: TextOverflow.ellipsis)),
-                        for (final e in settings.efforts) DropdownMenuItem(value: e, child: Text(e)),
+                        DropdownMenuItem(
+                          value: null,
+                          child: Text(
+                            tr('по умолчанию', 'default'),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        for (final e in settings.efforts)
+                          DropdownMenuItem(value: e, child: Text(e)),
                       ],
                       onChanged: (v) => setState(() => _effort = v),
                     ),
@@ -327,21 +452,40 @@ class _ModelCardState extends State<ModelCard>
                 spacing: 8,
                 children: [
                   FilledButton.icon(
-                    onPressed: running && _spec != null ? () => proxy.pinModel(_spec!) : null,
+                    onPressed: running && _spec != null
+                        ? () => proxy.pinModel(_spec!)
+                        : null,
                     icon: const Icon(Icons.push_pin_outlined),
-                    label: Text(_spec == null ? tr('Закрепить', 'Pin') : tr('Закрепить $_spec', 'Pin $_spec')),
+                    label: Text(
+                      _spec == null
+                          ? tr('Закрепить', 'Pin')
+                          : tr('Закрепить $_spec', 'Pin $_spec'),
+                    ),
                   ),
                   OutlinedButton.icon(
-                    onPressed: running && pinned != null ? proxy.unpinModel : null,
+                    onPressed: running && pinned != null
+                        ? proxy.unpinModel
+                        : null,
                     icon: const Icon(Icons.undo),
-                    label: Text(tr(tr('Вернуть /model', 'Back to /model'), 'Back to /model')),
+                    label: Text(
+                      tr(
+                        tr('Вернуть /model', 'Back to /model'),
+                        'Back to /model',
+                      ),
+                    ),
                   ),
                 ],
               ),
               if (!running)
                 Padding(
                   padding: const EdgeInsets.only(top: 8),
-                  child: Text(tr('Запустите прокси, чтобы переключать модель.', 'Start the proxy to switch the model.'), style: TextStyle(color: Theme.of(context).hintColor)),
+                  child: Text(
+                    tr(
+                      'Запустите прокси, чтобы переключать модель.',
+                      'Start the proxy to switch the model.',
+                    ),
+                    style: TextStyle(color: Theme.of(context).hintColor),
+                  ),
                 ),
             ],
           ),

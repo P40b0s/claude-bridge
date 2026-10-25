@@ -294,6 +294,8 @@ pub struct GeoState {
 pub struct PresetInfo {
     pub alias: String,
     pub provider: String,
+    pub model: String,
+    pub reasoning: Option<String>,
     pub description: String,
 }
 

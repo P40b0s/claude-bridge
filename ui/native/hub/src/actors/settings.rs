@@ -37,7 +37,16 @@ impl SettingsActor {
             .collect();
         let presets = routing::PRESETS
             .iter()
-            .map(|p| PresetInfo { alias: p.alias.into(), provider: p.provider.as_str().into(), description: p.description.into() })
+            .map(|p| {
+                let target = routing::resolve(p.alias, None).expect("every preset must resolve");
+                PresetInfo {
+                    alias: p.alias.into(),
+                    provider: target.provider.as_str().into(),
+                    model: target.model,
+                    reasoning: target.reasoning.map(|r| r.as_str().into()),
+                    description: p.description.into(),
+                }
+            })
             .collect();
         SettingsState {
             values,
