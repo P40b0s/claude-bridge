@@ -141,6 +141,8 @@ The settings are `GEO_GUARD_ENABLED` and `GEO_ALLOWED_COUNTRIES`; they apply imm
 
 The UI refreshes limits every minute and on demand.
 
+When ChatGPT answers 429 `usage_limit_reached`, the proxy remembers the reset time and answers on its own until then instead of sending the conversation upstream; Claude Code gets `x-should-retry: false` and does not retry. The UI warns with a notification and the tray icon when a limit is reached, when Claude's or Codex's 5-hour window is 80% used, and when at the current pace it will run out before the reset.
+
 Subscription details are shown there as well. For ChatGPT: the plan and the paid plan's end date from the ID token. For Claude: the plan, start date and billing type from `~/.claude.json`; Claude Code does not store an end date. Gemini has no such details. In the CLI, `claude-bridge status` shows them.
 
 ## UI

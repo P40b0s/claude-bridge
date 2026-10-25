@@ -12,6 +12,7 @@ dirs = "7.0.0"
 dotenvy = "0.15.7"
 eventsource-stream = "0.2.3"
 futures-util = "0.3.34"
+jiff = "0.2.38"
 rand = "0.10.3"
 reqwest = { version = "0.13.5", features = ["form", "json", "stream"] }
 serde = { version = "1.0.229", features = ["derive"] }

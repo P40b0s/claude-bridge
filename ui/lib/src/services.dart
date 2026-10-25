@@ -2,6 +2,7 @@ import 'package:claude_bridge_ui/src/services/accounts_service.dart';
 import 'package:claude_bridge_ui/src/services/context_watch.dart';
 import 'package:claude_bridge_ui/src/services/error_service.dart';
 import 'package:claude_bridge_ui/src/services/geo_service.dart';
+import 'package:claude_bridge_ui/src/services/limit_watch.dart';
 import 'package:claude_bridge_ui/src/services/models_service.dart';
 import 'package:claude_bridge_ui/src/services/proxy_service.dart';
 import 'package:claude_bridge_ui/src/services/requests_service.dart';
@@ -19,6 +20,7 @@ class AppServices {
   late ModelsService modelsService;
   late GeoService geoService;
   late ContextWatch contextWatch;
+  late LimitWatch limitWatch;
   late TrayService trayService;
   AppServices._() {
     errorService = ErrorService();
@@ -30,7 +32,8 @@ class AppServices {
       requestsService.provider,
       settingsService.provider,
     );
-    trayService = TrayService(proxyService, contextWatch);
+    limitWatch = LimitWatch(requestsService.provider, accountsService.provider);
+    trayService = TrayService(proxyService, limitWatch, contextWatch);
     modelsService = ModelsService();
     geoService = GeoService();
   }
@@ -43,6 +46,7 @@ class AppServices {
   Future<void> dispose() async {
     await trayService.dispose();
     contextWatch.dispose();
+    limitWatch.dispose();
     await errorService.dispose();
     await proxyService.dispose();
     await accountsService.dispose();

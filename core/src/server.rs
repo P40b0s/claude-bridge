@@ -26,6 +26,7 @@ use crate::anthropic::{Aggregator, Event, MessageWriter, MessagesRequest, Outcom
 use crate::auth::google::GoogleAuth;
 use crate::auth::openai::OpenAiAuth;
 use crate::config;
+use crate::cooldown::Cooldowns;
 use crate::error::ProxyError;
 use crate::providers::anthropic;
 use crate::providers::codex::{self, CodexAuth};
@@ -50,6 +51,7 @@ pub struct AppState {
     pub reasoning_cache: ReasoningCache,
     pub log: RequestLog,
     pub geo: geo::Guard,
+    pub cooldowns: Cooldowns,
     /// Last model the user picked in any session; the fallback for sessions not seen yet.
     active: RwLock<Option<Target>>,
     /// Last model picked per Claude Code session (`x-claude-code-session-id`). Bare model
@@ -78,6 +80,7 @@ pub async fn serve(port: u16, default: Option<Target>) -> anyhow::Result<()> {
         reasoning_cache: ReasoningCache::default(),
         log: RequestLog::default(),
         geo: geo::Guard::default(),
+        cooldowns: Cooldowns::default(),
         active: RwLock::new(default),
         sessions: Mutex::default(),
         pinned: RwLock::new(None),
@@ -314,6 +317,9 @@ async fn route_message(
         ));
         return Err(Box::new((e, tracker)));
     }
+    if let Err(e) = state.cooldowns.check(target.provider) {
+        return Err(Box::new((e, tracker)));
+    }
     state.log.running(&tracker);
 
     info!(
@@ -368,7 +374,7 @@ async fn route_message(
         ))
     };
     let (tx, rx) = mpsc::channel(64);
-    let (provider_name, model_name) = (target.provider.as_str(), target.model.clone());
+    let (provider_id, model_name) = (target.provider, target.model.clone());
     let writer = MessageWriter::new(tx.clone(), target.model.clone());
     let key = |name: &str| config::env(name).ok_or_else(|| missing_key(name));
     let provider: BoxFuture<'static, Result<Outcome, ProxyError>> = match target.provider {
@@ -407,10 +413,11 @@ async fn route_message(
     tokio::spawn(async move {
         match provider.await {
             Ok(outcome) => {
-                outcome.usage.log(provider_name, &model_name);
+                outcome.usage.log(provider_id.as_str(), &model_name);
                 state.log.publish(tracker.ok(&outcome));
             }
             Err(e) => {
+                state.cooldowns.note(provider_id, &e);
                 state.log.publish(tracker.failed(&e));
                 if !e.is_client_gone() {
                     let _ = tx.send(Err(e)).await;

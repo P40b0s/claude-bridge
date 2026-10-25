@@ -6,6 +6,7 @@ pub mod auth;
 pub mod claude_settings;
 pub mod config;
 pub mod control;
+pub mod cooldown;
 pub mod error;
 pub mod families;
 pub mod geo;

@@ -62,7 +62,7 @@ class RequestsPage extends StatelessWidget
                   : ListView.separated(
                       itemCount: entries.length,
                       separatorBuilder: (_, _) => const Divider(height: 1),
-                      itemBuilder: (context, i) => _RequestTile(entries[i]),
+                      itemBuilder: (context, i) => _RequestTile(entries[i], context.appServices.contextWatch.threshold),
                     ),
             ),
           ],
@@ -87,8 +87,10 @@ class _Stat extends StatelessWidget
 
 class _RequestTile extends StatelessWidget
 {
-  const _RequestTile(this.entry);
+  const _RequestTile(this.entry, this.warnAt);
   final RequestEntry entry;
+  ///Порог предупреждения о контексте, 0 - отключено
+  final int warnAt;
 
   @override
   Widget build(BuildContext context)
@@ -113,7 +115,53 @@ class _RequestTile extends StatelessWidget
         maxLines: 3,
         overflow: TextOverflow.ellipsis,
       ),
-      trailing: entry.httpStatus == null ? null : Text('${entry.httpStatus}'),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ?_context(theme),
+          if (entry.httpStatus != null) Padding(padding: const EdgeInsets.only(left: 16), child: Text('${entry.httpStatus}')),
+        ],
+      ),
+    );
+  }
+
+  ///Полный промпт и доля из кэша: сразу видно, что сессия раздулась или кэш не работает
+  Widget? _context(ThemeData theme)
+  {
+    final input = entry.inputTokens;
+    if (input == null)
+    {
+      return null;
+    }
+    final cacheRead = entry.cacheReadTokens ?? 0;
+    final context = input + cacheRead + (entry.cacheWriteTokens ?? 0);
+    final hit = context == 0 ? 0 : cacheRead * 100 ~/ context;
+    final large = warnAt > 0 && context >= warnAt;
+    //Промах кэша на большом промпте: каждый такой запрос стоит всего контекста
+    final missed = context >= 20000 && hit < 50;
+    return Tooltip(
+      message: tr(
+        'Контекст: весь промпт запроса (вход + чтение и запись кэша). Из кэша $hit%',
+        'Context: the whole prompt (input + cache reads and writes). $hit% from cache',
+      ),
+      child: SizedBox(
+        width: 120,
+        child: Text.rich(
+          TextSpan(
+            children: [
+              TextSpan(
+                text: formatTokens(context),
+                style: TextStyle(fontWeight: FontWeight.w600, color: large ? Colors.orange : null),
+              ),
+              TextSpan(
+                text: tr('  кэш $hit%', '  cache $hit%'),
+                style: TextStyle(color: missed ? theme.colorScheme.error : theme.hintColor),
+              ),
+            ],
+          ),
+          textAlign: TextAlign.end,
+        ),
+      ),
     );
   }
 

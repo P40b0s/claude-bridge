@@ -40,6 +40,9 @@ pub struct RequestRecord {
     pub stop_reason: Option<String>,
     pub usage: Option<Usage>,
     pub error: Option<String>,
+    /// Unix ms when the provider's usage limit resets (the request hit it).
+    #[serde(default)]
+    pub retry_at: Option<i64>,
 }
 
 /// A request in flight. Finishing consumes it, so every request is reported exactly once.
@@ -88,6 +91,7 @@ impl Tracker {
         let mut r = self.done(RequestStatus::Error);
         r.http_status = Some(err.status.as_u16());
         r.error = Some(err.message.clone());
+        r.retry_at = err.retry_at;
         r
     }
 }
@@ -120,6 +124,7 @@ impl RequestLog {
             stop_reason: None,
             usage: None,
             error: None,
+            retry_at: None,
         };
         Tracker { record, started: Instant::now() }
     }

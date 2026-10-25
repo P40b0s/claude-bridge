@@ -11,7 +11,14 @@ pub async fn run() {
         let ShowNotification { title, body } = pack.message;
         // Sending blocks on D-Bus (Linux) or the OS API, so keep it off the async workers.
         tokio::task::spawn_blocking(move || {
-            if let Err(error) = Notification::new().appname("Claude Bridge").summary(&title).body(&body).show() {
+            let mut notification = Notification::new();
+            notification.appname("Claude Bridge").summary(&title).body(&body);
+            // Cinnamon and GNOME hide normal banners over a fullscreen window and only play the
+            // sound. These warnings are rare and need a reaction, so they are critical; they then
+            // stay on screen until dismissed.
+            #[cfg(all(unix, not(target_os = "macos")))]
+            notification.urgency(notify_rust::Urgency::Critical);
+            if let Err(error) = notification.show() {
                 tracing::warn!("desktop notification failed: {error}");
             }
         });

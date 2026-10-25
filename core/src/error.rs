@@ -10,6 +10,8 @@ use serde_json::{Value, json};
 pub struct ProxyError {
     pub status: StatusCode,
     pub message: String,
+    /// Unix ms when a usage limit resets; set on 429s that say so.
+    pub retry_at: Option<i64>,
 }
 
 /// Non-standard status used internally when the client hung up mid-stream.
@@ -21,7 +23,7 @@ const PROVIDER_AUTH: StatusCode = StatusCode::FAILED_DEPENDENCY;
 
 impl ProxyError {
     pub fn new(status: StatusCode, message: impl Into<String>) -> Self {
-        Self { status, message: message.into() }
+        Self { status, message: message.into(), retry_at: None }
     }
 
     pub fn bad_request(message: impl Into<String>) -> Self {
@@ -46,7 +48,8 @@ impl ProxyError {
             Ok(s) if s.is_client_error() || s.is_server_error() => s,
             _ => StatusCode::BAD_GATEWAY,
         };
-        Self::new(status, message)
+        let retry_at = (status == StatusCode::TOO_MANY_REQUESTS).then(|| limit_reset(body)).flatten();
+        Self { retry_at, ..Self::new(status, message) }
     }
 
     pub fn client_gone() -> Self {
@@ -85,9 +88,30 @@ impl std::fmt::Display for ProxyError {
 }
 
 impl IntoResponse for ProxyError {
+    /// A limit that resets in minutes or hours is not worth retrying: `x-should-retry: false`
+    /// makes Claude Code show the error at once instead of re-sending the whole conversation.
     fn into_response(self) -> Response {
-        (self.status, Json(self.body())).into_response()
+        let mut resp = (self.status, Json(self.body())).into_response();
+        if let Some(at) = self.retry_at {
+            let secs = ((at - crate::auth::now_ms()) / 1000).max(1);
+            let headers = resp.headers_mut();
+            headers.insert("retry-after", secs.into());
+            headers.insert("x-should-retry", axum::http::HeaderValue::from_static("false"));
+        }
+        resp
     }
+}
+
+/// When a 429 body says the limit resets: ChatGPT's `usage_limit_reached` carries
+/// `resets_at` (Unix s) and `resets_in_seconds`.
+fn limit_reset(body: &str) -> Option<i64> {
+    let json: Value = serde_json::from_str(body).ok()?;
+    let error = &json["error"];
+    error["resets_at"]
+        .as_i64()
+        .map(|s| s * 1000)
+        .or_else(|| error["resets_in_seconds"].as_i64().map(|s| crate::auth::now_ms() + s * 1000))
+        .filter(|&at| at > crate::auth::now_ms())
 }
 
 impl From<reqwest::Error> for ProxyError {
@@ -115,5 +139,19 @@ pub fn truncate(s: &str, max: usize) -> &str {
     match s.char_indices().nth(max) {
         Some((idx, _)) => &s[..idx],
         None => s,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn usage_limit_reset() {
+        let at = crate::auth::now_ms() / 1000 + 9256;
+        let body = format!(r#"{{"error":{{"type":"usage_limit_reached","resets_at":{at},"resets_in_seconds":9256}}}}"#);
+        assert_eq!(ProxyError::upstream("OpenAI", 429, &body).retry_at, Some(at * 1000));
+        assert_eq!(ProxyError::upstream("OpenAI", 500, &body).retry_at, None);
+        assert_eq!(ProxyError::upstream("OpenAI", 429, "rate limited").retry_at, None);
     }
 }

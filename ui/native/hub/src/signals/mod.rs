@@ -255,6 +255,8 @@ pub struct RequestEntry {
     pub cache_write_tokens: Option<i64>,
     pub output_tokens: Option<i64>,
     pub error: Option<String>,
+    /// Unix ms when the provider's usage limit resets; set while the request hit it.
+    pub retry_at: Option<i64>,
 }
 
 impl From<RequestRecord> for RequestEntry {
@@ -281,6 +283,7 @@ impl From<RequestRecord> for RequestEntry {
             cache_write_tokens: r.usage.map(|u| u.cache_creation_input_tokens as i64),
             output_tokens: r.usage.map(|u| u.output_tokens as i64),
             error: r.error,
+            retry_at: r.retry_at,
         }
     }
 }

@@ -378,6 +378,41 @@ class _ModelCardState extends State<ModelCard> {
     }
   }
 
+  ///Другая модель начнёт длинную сессию без кэша: сначала спрашиваем
+  Future<void> _pin(SavedModelInfo model, String spec) async {
+    final services = context.appServices;
+    final watch = services.contextWatch;
+    if (watch.switchLosesCache(model.provider, model.model)) {
+      final size = formatTokens(watch.context ?? 0);
+      final pin = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text(tr('Длинная сессия', 'Long session')),
+          content: Text(
+            tr(
+              'Контекст $size, кэш не перенесётся: первый запрос к $spec пойдёт без кэша и съест лимит целиком. Сначала /compact?',
+              'Context is $size and the cache does not carry over: the first request to $spec goes uncached and costs the full context. /compact first?',
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text(tr('Сначала /compact', '/compact first')),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: Text(tr('Всё равно закрепить', 'Pin anyway')),
+            ),
+          ],
+        ),
+      );
+      if (pin != true) {
+        return;
+      }
+    }
+    services.proxyService.pinModel(spec);
+  }
+
   @override
   Widget build(BuildContext context) {
     final proxy = context.appServices.proxyService;
@@ -458,7 +493,7 @@ class _ModelCardState extends State<ModelCard> {
                 children: [
                   FilledButton.icon(
                     onPressed: running && spec != null
-                        ? () => proxy.pinModel(spec)
+                        ? () => _pin(selected!, spec)
                         : null,
                     icon: const Icon(Icons.push_pin_outlined),
                     label: Text(
