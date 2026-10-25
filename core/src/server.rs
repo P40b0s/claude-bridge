@@ -338,7 +338,12 @@ async fn route_message(
     }
 
     if target.provider == Provider::Anthropic {
-        return match anthropic::passthrough(&state, raw, &target.model, &headers, query).await {
+        let on_usage = {
+            let state = state.clone();
+            let id = tracker.id();
+            move |usage| state.log.set_usage(id, usage)
+        };
+        return match anthropic::passthrough(&state, raw, &target.model, &headers, query, on_usage).await {
             Ok(resp) => {
                 state
                     .log
@@ -363,6 +368,7 @@ async fn route_message(
         ))
     };
     let (tx, rx) = mpsc::channel(64);
+    let (provider_name, model_name) = (target.provider.as_str(), target.model.clone());
     let writer = MessageWriter::new(tx.clone(), target.model.clone());
     let key = |name: &str| config::env(name).ok_or_else(|| missing_key(name));
     let provider: BoxFuture<'static, Result<Outcome, ProxyError>> = match target.provider {
@@ -400,7 +406,10 @@ async fn route_message(
     };
     tokio::spawn(async move {
         match provider.await {
-            Ok(outcome) => state.log.publish(tracker.ok(&outcome)),
+            Ok(outcome) => {
+                outcome.usage.log(provider_name, &model_name);
+                state.log.publish(tracker.ok(&outcome));
+            }
             Err(e) => {
                 state.log.publish(tracker.failed(&e));
                 if !e.is_client_gone() {

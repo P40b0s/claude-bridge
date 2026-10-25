@@ -2,6 +2,7 @@ use std::io::IsTerminal;
 
 use anyhow::{Context, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use tracing_subscriber::fmt::writer::BoxMakeWriter;
 
 use claude_bridge_core::auth::{self, google, now_ms, openai};
 use claude_bridge_core::launcher::{self, ContextWindow, Launch};
@@ -89,12 +90,19 @@ enum AuthProvider {
 async fn main() {
     config::load_env_file();
     let cli = Cli::parse();
+    // The background proxy writes its own log file so it can rotate it; stderr (still pointed at
+    // the same file) only catches panics.
+    let log_file = std::env::var_os(control::LOG_FILE_ENV).and_then(|path| control::RotatingLog::open(path.into()).ok());
+    let (writer, ansi) = match log_file {
+        Some(log) => (BoxMakeWriter::new(move || log.clone()), false),
+        None => (BoxMakeWriter::new(std::io::stderr), std::io::stderr().is_terminal()),
+    };
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_env("CLAUDE_BRIDGE_LOG").unwrap_or_else(|_| "claude_bridge=info".into()),
         )
-        .with_ansi(std::io::stderr().is_terminal())
-        .with_writer(std::io::stderr)
+        .with_ansi(ansi)
+        .with_writer(writer)
         .init();
 
     if let Err(e) = run(cli.command).await {

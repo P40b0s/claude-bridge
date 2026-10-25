@@ -9,8 +9,10 @@
 use axum::body::Body;
 use axum::http::HeaderMap;
 use axum::response::Response;
+use futures_util::StreamExt;
 use serde_json::{Value, json};
 
+use crate::anthropic::Usage;
 use crate::config;
 use crate::error::ProxyError;
 use crate::server::AppState;
@@ -54,6 +56,7 @@ pub async fn passthrough(
     model: &str,
     client: &HeaderMap,
     query: Option<&str>,
+    on_usage: impl FnOnce(Usage) + Send + 'static,
 ) -> Result<Response, ProxyError> {
     let base = config::env("ANTHROPIC_UPSTREAM_URL").unwrap_or_else(|| DEFAULT_UPSTREAM.into());
     let mut url = format!("{}/v1/messages", base.trim_end_matches('/'));
@@ -90,6 +93,12 @@ pub async fn passthrough(
     if let Some(limits) = usage::from_anthropic_headers(resp.headers()) {
         usage::save_claude(&limits);
     }
+    let sse = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.contains("event-stream"));
+    let success = resp.status().is_success();
     let mut out = Response::builder().status(resp.status().as_u16());
     for (name, value) in resp.headers() {
         // Claude Code shows its own limit warnings from the rate-limit headers.
@@ -98,7 +107,86 @@ pub async fn passthrough(
             out = out.header(name, value.as_bytes());
         }
     }
-    out.body(Body::from_stream(resp.bytes_stream())).map_err(|e| ProxyError::internal(e.to_string()))
+    let body = if success {
+        let mut scanner =
+            UsageScanner { model: model.into(), sse, buf: Vec::new(), usage: None, on_usage: Some(Box::new(on_usage)) };
+        Body::from_stream(resp.bytes_stream().inspect(move |chunk| {
+            if let Ok(chunk) = chunk {
+                scanner.feed(chunk);
+            }
+        }))
+    } else {
+        Body::from_stream(resp.bytes_stream())
+    };
+    out.body(body).map_err(|e| ProxyError::internal(e.to_string()))
+}
+
+/// Reads token usage out of the piped reply without changing it, and logs it once the reply
+/// is done (or the client went away).
+struct UsageScanner {
+    model: String,
+    sse: bool,
+    buf: Vec<u8>,
+    usage: Option<Usage>,
+    on_usage: Option<Box<dyn FnOnce(Usage) + Send>>,
+}
+
+impl UsageScanner {
+    fn feed(&mut self, chunk: &[u8]) {
+        self.buf.extend_from_slice(chunk);
+        if !self.sse {
+            return;
+        }
+        while let Some(end) = self.buf.iter().position(|&b| b == b'\n') {
+            let line: Vec<u8> = self.buf.drain(..=end).collect();
+            if let Some(data) = line.strip_prefix(b"data:")
+                && let Ok(event) = serde_json::from_slice::<Value>(data)
+            {
+                match event["type"].as_str() {
+                    Some("message_start") => self.take(&event["message"]["usage"]),
+                    Some("message_delta") => self.take(&event["usage"]),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    /// Later events repeat or update counts, so each field present overwrites the earlier one.
+    fn take(&mut self, u: &Value) {
+        if !u.is_object() {
+            return;
+        }
+        let usage = self.usage.get_or_insert_with(Usage::default);
+        let field = |name: &str| u[name].as_u64();
+        if let Some(n) = field("input_tokens") {
+            usage.input_tokens = n;
+        }
+        if let Some(n) = field("output_tokens") {
+            usage.output_tokens = n;
+        }
+        if let Some(n) = field("cache_creation_input_tokens") {
+            usage.cache_creation_input_tokens = n;
+        }
+        if let Some(n) = field("cache_read_input_tokens") {
+            usage.cache_read_input_tokens = n;
+        }
+    }
+}
+
+impl Drop for UsageScanner {
+    fn drop(&mut self) {
+        if !self.sse
+            && let Ok(reply) = serde_json::from_slice::<Value>(&self.buf)
+        {
+            self.take(&reply["usage"]);
+        }
+        if let Some(usage) = self.usage {
+            usage.log("anthropic", &self.model);
+            if let Some(on_usage) = self.on_usage.take() {
+                on_usage(usage);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -111,6 +199,15 @@ mod tests {
             h.insert(*k, v.parse().unwrap());
         }
         h
+    }
+
+    #[test]
+    fn scanner_reads_stream_usage() {
+        let mut s = UsageScanner { model: "m".into(), sse: true, buf: Vec::new(), usage: None, on_usage: None };
+        s.feed(b"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5,\"cache_read_input_tokens\":90,\"cache_creation_input_tokens\":3,\"output_tokens\":1}}}\n\nevent: message_delta\ndata: {\"type\":\"message_de");
+        s.feed(b"lta\",\"usage\":{\"output_tokens\":42}}\n\n");
+        let u = s.usage.unwrap();
+        assert_eq!((u.input_tokens, u.cache_read_input_tokens, u.cache_creation_input_tokens, u.output_tokens), (5, 90, 3, 42));
     }
 
     #[test]

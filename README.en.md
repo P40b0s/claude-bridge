@@ -177,6 +177,7 @@ Environment variables take precedence over `.env`. After changing settings, rest
 | `OPENAI_COMPAT_API_KEY` | optional OpenAI-compatible API key |
 | `~/.claude-bridge/models.json` | custom models and the model selected in the UI |
 | `CLAUDE_BRIDGE_PORT` | proxy port, `17870` by default |
+| `CLAUDE_BRIDGE_CONTEXT_WARN_TOKENS` | context size per request at which the UI warns with a tray icon and a notification; default `150000`, `0` turns it off |
 | `CODEX_REASONING_EFFORT` | Codex effort when no `@suffix` is given; `high` by default |
 | `CODEX_REASONING_SUMMARY` | `auto` / `concise` / `detailed` / `none` |
 | `CODEX_TEXT_VERBOSITY` | `low` / `medium` / `high` |

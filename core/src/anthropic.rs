@@ -198,6 +198,26 @@ pub struct Usage {
     pub cache_read_input_tokens: u64,
 }
 
+impl Usage {
+    /// One `usage` line per finished request in proxy.log. `context` is the whole prompt the
+    /// upstream processed (uncached + cache reads + cache writes).
+    pub fn log(&self, provider: &str, model: &str) {
+        let context = self.input_tokens + self.cache_read_input_tokens + self.cache_creation_input_tokens;
+        let cache_hit_pct = (self.cache_read_input_tokens * 100).checked_div(context).unwrap_or(0);
+        tracing::info!(
+            provider,
+            model,
+            context,
+            input = self.input_tokens,
+            cache_read = self.cache_read_input_tokens,
+            cache_write = self.cache_creation_input_tokens,
+            output = self.output_tokens,
+            cache_hit_pct,
+            "usage"
+        );
+    }
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StartBlock {

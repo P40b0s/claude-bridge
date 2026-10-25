@@ -65,6 +65,13 @@ pub struct SaveSettings {
     pub values: BTreeMap<String, String>,
 }
 
+/// A desktop notification (for example the context-size warning).
+#[derive(Deserialize, DartSignal)]
+pub struct ShowNotification {
+    pub title: String,
+    pub body: String,
+}
+
 #[derive(Deserialize, DartSignal)]
 pub struct SaveModel {
     pub id: Option<String>,
@@ -245,6 +252,7 @@ pub struct RequestEntry {
     pub stop_reason: Option<String>,
     pub input_tokens: Option<i64>,
     pub cache_read_tokens: Option<i64>,
+    pub cache_write_tokens: Option<i64>,
     pub output_tokens: Option<i64>,
     pub error: Option<String>,
 }
@@ -270,6 +278,7 @@ impl From<RequestRecord> for RequestEntry {
             stop_reason: r.stop_reason,
             input_tokens: r.usage.map(|u| u.input_tokens as i64),
             cache_read_tokens: r.usage.map(|u| u.cache_read_input_tokens as i64),
+            cache_write_tokens: r.usage.map(|u| u.cache_creation_input_tokens as i64),
             output_tokens: r.usage.map(|u| u.output_tokens as i64),
             error: r.error,
         }

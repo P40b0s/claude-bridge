@@ -177,6 +177,7 @@ UI ищет CLI в таком порядке: рядом со своим исп�
 | `OPENAI_COMPAT_API_KEY` | необязательный ключ OpenAI-совместимого API |
 | `~/.claude-bridge/models.json` | пользовательские модели и модель, выбранная в UI |
 | `CLAUDE_BRIDGE_PORT` | порт прокси, по умолчанию `17870` |
+| `CLAUDE_BRIDGE_CONTEXT_WARN_TOKENS` | с какого размера контекста на запрос UI предупреждает значком в трее и уведомлением; по умолчанию `150000`, `0` отключает |
 | `CODEX_REASONING_EFFORT` | усилие Codex, если не указан `@суффикс`; по умолчанию `high` |
 | `CODEX_REASONING_SUMMARY` | `auto` / `concise` / `detailed` / `none` |
 | `CODEX_TEXT_VERBOSITY` | `low` / `medium` / `high` |

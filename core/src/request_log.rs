@@ -49,6 +49,10 @@ pub struct Tracker {
 }
 
 impl Tracker {
+    pub fn id(&self) -> u64 {
+        self.record.id
+    }
+
     pub fn set_target(&mut self, target: &Target) {
         self.record.provider = Some(target.provider.as_str().into());
         self.record.model = Some(target.model.clone());
@@ -138,6 +142,18 @@ impl RequestLog {
                 }
             }
         }
+        let _ = self.tx.send(record);
+    }
+
+    /// Usage that arrives after the record was published (Anthropic passthrough reads it from
+    /// the piped reply once it ends).
+    pub fn set_usage(&self, id: u64, usage: Usage) {
+        let record = {
+            let mut recent = self.recent.lock().unwrap();
+            let Some(record) = recent.iter_mut().find(|r| r.id == id) else { return };
+            record.usage = Some(usage);
+            record.clone()
+        };
         let _ = self.tx.send(record);
     }
 

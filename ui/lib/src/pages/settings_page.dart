@@ -1,5 +1,6 @@
 import 'package:claude_bridge_ui/src/controls/section_card.dart';
 import 'package:claude_bridge_ui/src/services.dart';
+import 'package:claude_bridge_ui/src/services/context_watch.dart';
 import 'package:flutter/material.dart';
 import 'package:claude_bridge_ui/src/i18n.dart';
 
@@ -125,6 +126,18 @@ List<_Group> get _groups => [
     ),
   ]),
   _Group(tr('Приложение', 'App'), Icons.desktop_windows_outlined, [
+    _Field(
+      contextWarnKey,
+      tr(
+        'Предупреждать о контексте от, токенов',
+        'Warn about context from, tokens',
+      ),
+      kind: _Kind.number,
+      hint: tr(
+        'По умолчанию 150000; 0 отключает. Значок в трее и уведомление',
+        'Default 150000; 0 turns it off. Tray icon and a notification',
+      ),
+    ),
     _Field(
       'CLAUDE_BRIDGE_BIN',
       tr('Путь к claude-bridge', 'Path to claude-bridge'),

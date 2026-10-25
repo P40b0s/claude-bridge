@@ -1,4 +1,5 @@
 import 'package:claude_bridge_ui/src/services/accounts_service.dart';
+import 'package:claude_bridge_ui/src/services/context_watch.dart';
 import 'package:claude_bridge_ui/src/services/error_service.dart';
 import 'package:claude_bridge_ui/src/services/geo_service.dart';
 import 'package:claude_bridge_ui/src/services/models_service.dart';
@@ -17,14 +18,19 @@ class AppServices {
   late SettingsService settingsService;
   late ModelsService modelsService;
   late GeoService geoService;
+  late ContextWatch contextWatch;
   late TrayService trayService;
   AppServices._() {
     errorService = ErrorService();
     proxyService = ProxyService();
-    trayService = TrayService(proxyService);
     accountsService = AccountsService();
     requestsService = RequestsService();
     settingsService = SettingsService();
+    contextWatch = ContextWatch(
+      requestsService.provider,
+      settingsService.provider,
+    );
+    trayService = TrayService(proxyService, contextWatch);
     modelsService = ModelsService();
     geoService = GeoService();
   }
@@ -36,6 +42,7 @@ class AppServices {
 
   Future<void> dispose() async {
     await trayService.dispose();
+    contextWatch.dispose();
     await errorService.dispose();
     await proxyService.dispose();
     await accountsService.dispose();

@@ -4,6 +4,7 @@ import 'dart:async';
 import 'dart:io' as io;
 
 import 'package:claude_bridge_ui/src/i18n.dart';
+import 'package:claude_bridge_ui/src/services/context_watch.dart';
 import 'package:claude_bridge_ui/src/services/proxy_service.dart';
 import 'package:flutter/foundation.dart';
 import 'package:nativeapi/nativeapi.dart' show ContextMenuTrigger;
@@ -11,9 +12,10 @@ import 'package:tray_manager/legacy.dart';
 import 'package:window_manager/window_manager.dart';
 
 class TrayService with WindowListener {
-  TrayService(this._proxyService);
+  TrayService(this._proxyService, this._contextWatch);
 
   final ProxyService _proxyService;
+  final ContextWatch _contextWatch;
   late final VoidCallback _onProxyChanged;
   late final VoidCallback _onLanguageChanged;
   bool _exiting = false;
@@ -25,6 +27,7 @@ class TrayService with WindowListener {
     _onProxyChanged = _update;
     _onLanguageChanged = _update;
     _proxyService.provider.addListener(_onProxyChanged);
+    _contextWatch.addListener(_onProxyChanged);
     langNotifier.addListener(_onLanguageChanged);
     windowManager.addListener(this);
     await windowManager.setPreventClose(true);
@@ -40,7 +43,13 @@ class TrayService with WindowListener {
 
   Future<void> _updateTray() async {
     final state = _proxyService.provider.state;
+    final warning = _contextWatch.warning && (state?.running ?? false);
     final (status, icon) = switch (state) {
+      //Перекрывает и «занят»: в длинной сессии прокси занят почти всё время
+      _ when warning => (
+        _contextWatch.message,
+        'assets/icons/bridge_warning.png',
+      ),
       null => (
         tr('Проверка прокси', 'Checking proxy'),
         'assets/icons/bridge_checking.png',
@@ -115,6 +124,7 @@ class TrayService with WindowListener {
   Future<void> dispose() async {
     if (_supported) {
       _proxyService.provider.removeListener(_onProxyChanged);
+      _contextWatch.removeListener(_onProxyChanged);
       langNotifier.removeListener(_onLanguageChanged);
       windowManager.removeListener(this);
       await trayManager.destroy();

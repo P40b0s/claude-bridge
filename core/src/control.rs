@@ -1,8 +1,10 @@
 //! Client side of the background proxy: start, stop, health, model pinning and the
 //! live request log. Used by both the CLI and the UI.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, bail};
@@ -17,7 +19,9 @@ use crate::routing::Target;
 use crate::server::SHUTDOWN_HEADER;
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
-const MAX_LOG_BYTES: u64 = 10 * 1024 * 1024;
+const MAX_LOG_BYTES: u64 = 20 * 1024 * 1024;
+/// Set for the background proxy: it writes its log there itself, so it can rotate while running.
+pub const LOG_FILE_ENV: &str = "CLAUDE_BRIDGE_LOG_FILE";
 
 pub fn base_url(port: u16) -> String {
     format!("http://127.0.0.1:{port}")
@@ -112,6 +116,42 @@ fn open_log() -> anyhow::Result<std::fs::File> {
     Ok(std::fs::OpenOptions::new().create(true).append(true).open(&path)?)
 }
 
+/// Append-only log file that moves itself to `.log.1` once it grows past `MAX_LOG_BYTES`.
+#[derive(Clone)]
+pub struct RotatingLog(Arc<Mutex<RotatingFile>>);
+
+struct RotatingFile {
+    path: PathBuf,
+    file: std::fs::File,
+    len: u64,
+}
+
+impl RotatingLog {
+    pub fn open(path: PathBuf) -> std::io::Result<Self> {
+        let file = std::fs::OpenOptions::new().create(true).append(true).open(&path)?;
+        let len = file.metadata()?.len();
+        Ok(Self(Arc::new(Mutex::new(RotatingFile { path, file, len }))))
+    }
+}
+
+impl Write for RotatingLog {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let mut log = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if log.len > 0 && log.len + buf.len() as u64 > MAX_LOG_BYTES {
+            let _ = std::fs::rename(&log.path, log.path.with_extension("log.1"));
+            log.file = std::fs::OpenOptions::new().create(true).append(true).open(&log.path)?;
+            log.len = 0;
+        }
+        let n = log.file.write(buf)?;
+        log.len += n as u64;
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).file.flush()
+    }
+}
+
 /// The `claude-bridge` CLI binary: `CLAUDE_BRIDGE_BIN`, next to this executable, ~/.cargo/bin, then PATH.
 pub fn find_cli() -> Option<PathBuf> {
     let name = if cfg!(windows) { "claude-bridge.exe" } else { "claude-bridge" };
@@ -137,6 +177,7 @@ pub async fn ensure_proxy(cli: &Path, port: u16, default: &str, restart: bool) -
     let mut cmd = Command::new(cli);
     cmd.args(["serve", "--default", default])
         .env("CLAUDE_BRIDGE_PORT", port.to_string())
+        .env(LOG_FILE_ENV, log_path())
         .stdin(Stdio::null())
         .stdout(log.try_clone()?)
         .stderr(log);
