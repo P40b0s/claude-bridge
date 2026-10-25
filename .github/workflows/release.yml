@@ -28,16 +28,23 @@ jobs:
       tag: ${{ steps.v.outputs.tag }}
       version: ${{ steps.v.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      # Default branch with every tag, so a missing tag gets a clear error instead of a failed checkout.
+      - uses: actions/checkout@v5
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
       - id: v
         name: Check tag against cli/Cargo.toml
         shell: bash
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          tag="${{ inputs.tag || github.ref_name }}"
+          tag="$TAG"
+          if ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "::error::tag $tag does not exist; push it first: git tag $tag && git push origin $tag"
+            exit 1
+          fi
           version="${tag#v}"
-          crate=$(sed -n 's/^version = "\(.*\)"/\1/p' cli/Cargo.toml | head -1)
+          crate=$(git show "$tag:cli/Cargo.toml" | sed -n 's/^version = "\(.*\)"/\1/p' | head -1)
           if [ "$version" != "$crate" ]; then
             echo "::error::tag $tag does not match cli/Cargo.toml version $crate"
             exit 1
@@ -64,7 +71,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ needs.version.outputs.tag }}
 
