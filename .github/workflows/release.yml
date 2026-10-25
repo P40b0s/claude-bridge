@@ -46,7 +46,7 @@ jobs:
           version="${tag#v}"
           crate=$(git show "$tag:cli/Cargo.toml" | sed -n 's/^version = "\(.*\)"/\1/p' | head -1)
           if [ "$version" != "$crate" ]; then
-            echo "::error::tag $tag does not match cli/Cargo.toml version $crate"
+            echo "::error::tag $tag points at $(git rev-parse --short "$tag^{commit}"), where cli/Cargo.toml is $crate; was the tag created before the version bump? Move it: git tag -f $tag <commit> && git push -f origin $tag"
             exit 1
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"

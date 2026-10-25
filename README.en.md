@@ -229,10 +229,10 @@ If the signals in `ui/native/hub/src/signals` change, run `rinf gen` again.
 
 [`.github/workflows/release.yml`](.github/workflows/release.yml) builds the CLI and UI for Linux x64, macOS (universal) and Windows x64 and publishes a GitHub Release named after the version.
 
-1. Bump the version in `cli/Cargo.toml`.
-2. Create and push a tag:
+1. Commit your changes and run:
    ```bash
-   git tag v0.2.0 && git push origin v0.2.0
+   scripts/release.sh 0.2.0
    ```
+   The script bumps `cli/Cargo.toml`, commits it and pushes the commit together with the tag `v0.2.0`, so the tag always sits on the commit that carries the version.
 
 The tag must match the version in `cli/Cargo.toml`, or the build stops. An existing tag can be rebuilt with "Run workflow" on the Actions tab.

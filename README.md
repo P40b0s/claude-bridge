@@ -229,11 +229,11 @@ flutter run -d linux                       # или macos / windows
 
 [`.github/workflows/release.yml`](.github/workflows/release.yml) собирает CLI и UI под Linux x64, macOS (universal) и Windows x64 и публикует GitHub Release с именем, равным версии.
 
-1. Поднимите версию в `cli/Cargo.toml`.
-2. Создайте и отправьте тег:
+1. Закоммитьте изменения и выполните:
    ```bash
-   git tag v0.2.0 && git push origin v0.2.0
+   scripts/release.sh 0.2.0
    ```
+   Скрипт поднимет версию в `cli/Cargo.toml`, закоммитит её и отправит коммит вместе с тегом `v0.2.0`, поэтому тег всегда стоит на коммите с нужной версией.
 
 Тег должен совпадать с версией в `cli/Cargo.toml`, иначе сборка остановится. Пересобрать существующий тег можно через «Run workflow» во вкладке Actions.
 
