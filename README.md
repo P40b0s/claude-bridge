@@ -227,3 +227,10 @@ flutter run -d linux                       # или macos / windows
    ```
 
 Тег должен совпадать с версией в `cli/Cargo.toml`, иначе сборка остановится. Пересобрать существующий тег можно через «Run workflow» во вкладке Actions.
+
+<img width="1486" height="909" alt="page_1" src="https://github.com/user-attachments/assets/2df0bd70-cb19-4bd9-9065-d4fba09537e5" />
+<img width="1476" height="909" alt="page_2" src="https://github.com/user-attachments/assets/49a22ddd-f0a2-404c-bc8f-6eb8b3c029da" />
+<img width="1483" height="906" alt="page_3" src="https://github.com/user-attachments/assets/fb6f2bf0-028a-4e42-9b92-decd6c0f1e0f" />
+<img width="1479" height="907" alt="page_4" src="https://github.com/user-attachments/assets/686b6b52-1207-4512-9f3c-edf3d480ba14" />
+<img width="1481" height="907" alt="page_5" src="https://github.com/user-attachments/assets/834e6144-23f1-44be-b474-3f7b3263782c" />
+
