@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 pub enum Provider {
     CodexOauth,
     Openai,
+    OpenaiCompat,
     GeminiOauth,
     Gemini,
     Anthropic,
@@ -18,6 +19,7 @@ impl Provider {
         Some(match s {
             "codex-oauth" => Provider::CodexOauth,
             "openai" => Provider::Openai,
+            "openai-compat" => Provider::OpenaiCompat,
             "gemini-oauth" => Provider::GeminiOauth,
             "gemini" => Provider::Gemini,
             "anthropic" => Provider::Anthropic,
@@ -29,6 +31,7 @@ impl Provider {
         match self {
             Provider::CodexOauth => "codex-oauth",
             Provider::Openai => "openai",
+            Provider::OpenaiCompat => "openai-compat",
             Provider::GeminiOauth => "gemini-oauth",
             Provider::Gemini => "gemini",
             Provider::Anthropic => "anthropic",
@@ -41,6 +44,7 @@ impl Provider {
         match self {
             Provider::CodexOauth => "codex",
             Provider::Openai => "openai",
+            Provider::OpenaiCompat => "openai-compat",
             Provider::GeminiOauth | Provider::Gemini => "gemini",
             Provider::Anthropic => "anthropic",
         }
@@ -51,6 +55,7 @@ impl Provider {
         match self {
             Provider::CodexOauth => Some("gpt-5.6-luna"),
             Provider::Openai => Some("gpt-5-mini"),
+            Provider::OpenaiCompat => None,
             Provider::GeminiOauth | Provider::Gemini => Some("gemini-3-flash-preview"),
             Provider::Anthropic => None,
         }
@@ -61,6 +66,7 @@ impl Provider {
         match self {
             Provider::CodexOauth => Some("gpt-5.6-sol"),
             Provider::Openai => Some("gpt-5.5"),
+            Provider::OpenaiCompat => None,
             Provider::GeminiOauth | Provider::Gemini => Some("gemini-3.1-pro-preview"),
             Provider::Anthropic => None,
         }
@@ -68,7 +74,7 @@ impl Provider {
 
     /// Providers with server-side web search, which replaces Claude Code's WebSearch/WebFetch.
     pub fn has_native_search(self) -> bool {
-        self != Provider::Anthropic
+        !matches!(self, Provider::Anthropic | Provider::OpenaiCompat)
     }
 }
 
@@ -121,7 +127,11 @@ pub struct Target {
 
 impl Target {
     pub fn new(provider: Provider, model: impl Into<String>, reasoning: Option<Reasoning>) -> Self {
-        Self { provider, model: model.into(), reasoning }
+        Self {
+            provider,
+            model: model.into(),
+            reasoning,
+        }
     }
 }
 
@@ -134,23 +144,77 @@ pub struct Preset {
 
 /// The main shortcuts, in the order the UI and `claude-bridge model --list` show them.
 pub const PRESETS: &[Preset] = &[
-    Preset { alias: "opus", provider: Provider::Anthropic, description: "Claude Opus 5.5" },
-    Preset { alias: "sonnet", provider: Provider::Anthropic, description: "Claude Sonnet 5.5" },
-    Preset { alias: "haiku", provider: Provider::Anthropic, description: "Claude Haiku 5.5" },
-    Preset { alias: "sol", provider: Provider::CodexOauth, description: "GPT-5.6 Sol, frontier (High effort)" },
-    Preset { alias: "terra", provider: Provider::CodexOauth, description: "GPT-5.6 Terra, balanced" },
-    Preset { alias: "luna", provider: Provider::CodexOauth, description: "GPT-5.6 Luna, fast" },
-    Preset { alias: "gpt55", provider: Provider::CodexOauth, description: "GPT-5.5, previous frontier" },
-    Preset { alias: "gemini", provider: Provider::GeminiOauth, description: "Gemini 3.1 Pro" },
-    Preset { alias: "gemini-flash", provider: Provider::GeminiOauth, description: "Gemini 3 Flash" },
-    Preset { alias: "gemini-3p", provider: Provider::GeminiOauth, description: "Gemini 3 Pro" },
-    Preset { alias: "gemini-25p", provider: Provider::GeminiOauth, description: "Gemini 2.5 Pro" },
-    Preset { alias: "gemini-25f", provider: Provider::GeminiOauth, description: "Gemini 2.5 Flash" },
+    Preset {
+        alias: "opus",
+        provider: Provider::Anthropic,
+        description: "Claude Opus 5.5",
+    },
+    Preset {
+        alias: "sonnet",
+        provider: Provider::Anthropic,
+        description: "Claude Sonnet 5.5",
+    },
+    Preset {
+        alias: "haiku",
+        provider: Provider::Anthropic,
+        description: "Claude Haiku 5.5",
+    },
+    Preset {
+        alias: "sol",
+        provider: Provider::CodexOauth,
+        description: "GPT-5.6 Sol, frontier (High effort)",
+    },
+    Preset {
+        alias: "terra",
+        provider: Provider::CodexOauth,
+        description: "GPT-5.6 Terra, balanced",
+    },
+    Preset {
+        alias: "luna",
+        provider: Provider::CodexOauth,
+        description: "GPT-5.6 Luna, fast",
+    },
+    Preset {
+        alias: "gpt55",
+        provider: Provider::CodexOauth,
+        description: "GPT-5.5, previous frontier",
+    },
+    Preset {
+        alias: "gemini",
+        provider: Provider::GeminiOauth,
+        description: "Gemini 3.1 Pro",
+    },
+    Preset {
+        alias: "gemini-flash",
+        provider: Provider::GeminiOauth,
+        description: "Gemini 3 Flash",
+    },
+    Preset {
+        alias: "gemini-3p",
+        provider: Provider::GeminiOauth,
+        description: "Gemini 3 Pro",
+    },
+    Preset {
+        alias: "gemini-25p",
+        provider: Provider::GeminiOauth,
+        description: "Gemini 2.5 Pro",
+    },
+    Preset {
+        alias: "gemini-25f",
+        provider: Provider::GeminiOauth,
+        description: "Gemini 2.5 Flash",
+    },
 ];
 
 /// Efforts offered as `@suffix`, weakest first.
-pub const EFFORTS: &[Reasoning] =
-    &[Reasoning::Minimal, Reasoning::Low, Reasoning::Medium, Reasoning::High, Reasoning::Xhigh, Reasoning::Max];
+pub const EFFORTS: &[Reasoning] = &[
+    Reasoning::Minimal,
+    Reasoning::Low,
+    Reasoning::Medium,
+    Reasoning::High,
+    Reasoning::Xhigh,
+    Reasoning::Max,
+];
 
 /// `/model` shortcuts. Every Codex model also accepts an `@low|medium|high|xhigh|max` suffix.
 fn shortcut(name: &str) -> Option<&'static str> {
@@ -198,7 +262,9 @@ fn split_reasoning(s: &str) -> (&str, Option<Reasoning>) {
 pub fn resolve(model_field: &str, defaults: Option<&Target>) -> Result<Target, String> {
     let model_field = model_field.trim();
     if model_field.is_empty() {
-        return defaults.cloned().ok_or_else(|| "missing 'model' in request".into());
+        return defaults
+            .cloned()
+            .ok_or_else(|| "missing 'model' in request".into());
     }
 
     let (raw, typed_reasoning) = split_reasoning(model_field);
@@ -221,7 +287,9 @@ pub fn resolve(model_field: &str, defaults: Option<&Target>) -> Result<Target, S
         });
     }
 
-    let split = expanded.split_once(':').or_else(|| expanded.split_once('/'));
+    let split = expanded
+        .split_once(':')
+        .or_else(|| expanded.split_once('/'));
     if let Some((prefix, model)) = split
         && let Some(provider) = Provider::parse(&prefix.to_ascii_lowercase())
     {
@@ -233,7 +301,7 @@ pub fn resolve(model_field: &str, defaults: Option<&Target>) -> Result<Target, S
         Some(d) => Ok(Target::new(d.provider, expanded, reasoning.or(d.reasoning))),
         None => Err(format!(
             "cannot tell which provider serves model \"{model_field}\"; use provider:model \
-             (codex-oauth, openai, gemini-oauth, gemini, anthropic)"
+             (codex-oauth, openai, openai-compat, gemini-oauth, gemini, anthropic)"
         )),
     }
 }
@@ -262,7 +330,10 @@ mod tests {
         assert_eq!(r("terra"), codex("gpt-5.6-terra", None));
         assert_eq!(r("luna"), codex("gpt-5.6-luna", None));
         assert_eq!(r("gpt55"), codex("gpt-5.5", None));
-        assert_eq!(r("GPT-5.6-Sol"), codex("gpt-5.6-sol", Some(Reasoning::High)));
+        assert_eq!(
+            r("GPT-5.6-Sol"),
+            codex("gpt-5.6-sol", Some(Reasoning::High))
+        );
     }
 
     #[test]
@@ -286,37 +357,83 @@ mod tests {
     fn verbatim_model_at_level() {
         assert_eq!(r("terra@max"), codex("gpt-5.6-terra", Some(Reasoning::Max)));
         assert_eq!(r("luna@high"), codex("gpt-5.6-luna", Some(Reasoning::High)));
-        assert_eq!(r("codex@xhigh"), codex("gpt-5.6-sol", Some(Reasoning::Xhigh)));
-        assert_eq!(r("codex-oauth:gpt-5.5@medium"), codex("gpt-5.5", Some(Reasoning::Medium)));
+        assert_eq!(
+            r("codex@xhigh"),
+            codex("gpt-5.6-sol", Some(Reasoning::Xhigh))
+        );
+        assert_eq!(
+            r("codex-oauth:gpt-5.5@medium"),
+            codex("gpt-5.5", Some(Reasoning::Medium))
+        );
     }
 
     #[test]
     fn unknown_suffix_stays_in_name() {
-        assert_eq!(r("openai:ft:model@team"), Target::new(Provider::Openai, "ft:model@team", None));
+        assert_eq!(
+            r("openai:ft:model@team"),
+            Target::new(Provider::Openai, "ft:model@team", None)
+        );
     }
 
     #[test]
     fn provider_prefixes() {
-        assert_eq!(r("openai:gpt-5.5"), Target::new(Provider::Openai, "gpt-5.5", None));
-        assert_eq!(r("gemini/gemini-2.5-pro"), Target::new(Provider::Gemini, "gemini-2.5-pro", None));
-        assert_eq!(r("gemini-flash@low"), Target::new(Provider::GeminiOauth, "gemini-3-flash-preview", Some(Reasoning::Low)));
+        assert_eq!(
+            r("openai:gpt-5.5"),
+            Target::new(Provider::Openai, "gpt-5.5", None)
+        );
+        assert_eq!(
+            r("openai-compat:llama3.3"),
+            Target::new(Provider::OpenaiCompat, "llama3.3", None)
+        );
+        assert_eq!(
+            r("gemini/gemini-2.5-pro"),
+            Target::new(Provider::Gemini, "gemini-2.5-pro", None)
+        );
+        assert_eq!(
+            r("gemini-flash@low"),
+            Target::new(
+                Provider::GeminiOauth,
+                "gemini-3-flash-preview",
+                Some(Reasoning::Low)
+            )
+        );
     }
 
     #[test]
     fn explicit_claude_shortcuts() {
-        assert_eq!(r("anthropic:opus"), Target::new(Provider::Anthropic, "claude-opus-5-5", None));
+        assert_eq!(
+            r("anthropic:opus"),
+            Target::new(Provider::Anthropic, "claude-opus-5-5", None)
+        );
         let active = codex("gpt-5.6-sol", None);
-        assert_eq!(resolve("anthropic:haiku", Some(&active)).unwrap().provider, Provider::Anthropic);
+        assert_eq!(
+            resolve("anthropic:haiku", Some(&active)).unwrap().provider,
+            Provider::Anthropic
+        );
     }
 
     #[test]
     fn claude_models_follow_active_provider() {
         let active = codex("gpt-5.6-sol", None);
-        assert_eq!(resolve("claude-haiku-5-5", Some(&active)).unwrap(), codex("gpt-5.6-luna", None));
-        assert_eq!(resolve("claude-opus-5-5", Some(&active)).unwrap(), codex("gpt-5.6-sol", None));
-        assert_eq!(r("claude-sonnet-5-5"), Target::new(Provider::Anthropic, "claude-sonnet-5-5", None));
+        assert_eq!(
+            resolve("claude-haiku-5-5", Some(&active)).unwrap(),
+            codex("gpt-5.6-luna", None)
+        );
+        assert_eq!(
+            resolve("claude-opus-5-5", Some(&active)).unwrap(),
+            codex("gpt-5.6-sol", None)
+        );
+        assert_eq!(
+            r("claude-sonnet-5-5"),
+            Target::new(Provider::Anthropic, "claude-sonnet-5-5", None)
+        );
         let anthropic = Target::new(Provider::Anthropic, "claude-sonnet-5-5", None);
-        assert_eq!(resolve("claude-haiku-5-5", Some(&anthropic)).unwrap().provider, Provider::Anthropic);
+        assert_eq!(
+            resolve("claude-haiku-5-5", Some(&anthropic))
+                .unwrap()
+                .provider,
+            Provider::Anthropic
+        );
     }
 
     #[test]
@@ -329,7 +446,10 @@ mod tests {
     #[test]
     fn bare_names_use_active_provider() {
         let active = codex("gpt-5.6-sol", Some(Reasoning::Medium));
-        assert_eq!(resolve("gpt-5.4", Some(&active)).unwrap(), codex("gpt-5.4", Some(Reasoning::Medium)));
+        assert_eq!(
+            resolve("gpt-5.4", Some(&active)).unwrap(),
+            codex("gpt-5.4", Some(Reasoning::Medium))
+        );
         assert!(resolve("gpt-5.4", None).is_err());
     }
 }

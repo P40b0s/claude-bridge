@@ -8,6 +8,9 @@ use claude_bridge_core::{config, control, settings};
 /// Keys the settings page knows about; used to report values that come only from the environment.
 pub const KNOWN_KEYS: &[&str] = &[
     "OPENAI_API_KEY",
+    "OPENAI_COMPAT_BASE_URL",
+    "OPENAI_COMPAT_API_KEY",
+    "OPENAI_COMPAT_DEFAULT_MODEL",
     "GEMINI_API_KEY",
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_UPSTREAM_URL",
@@ -27,15 +30,23 @@ pub const KNOWN_KEYS: &[&str] = &[
 ];
 
 pub fn setting(key: &str) -> Option<String> {
-    settings::read().remove(key).filter(|v| !v.trim().is_empty()).or_else(|| config::env(key))
+    settings::read()
+        .remove(key)
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| config::env(key))
 }
 
 pub fn port() -> u16 {
-    setting("CLAUDE_BRIDGE_PORT").and_then(|p| p.parse().ok()).unwrap_or(config::DEFAULT_PORT)
+    setting("CLAUDE_BRIDGE_PORT")
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(config::DEFAULT_PORT)
 }
 
 pub fn cli_path() -> Option<PathBuf> {
-    setting("CLAUDE_BRIDGE_BIN").map(PathBuf::from).filter(|p| p.is_file()).or_else(control::find_cli)
+    setting("CLAUDE_BRIDGE_BIN")
+        .map(PathBuf::from)
+        .filter(|p| p.is_file())
+        .or_else(control::find_cli)
 }
 
 /// On unless CLAUDE_BRIDGE_AUTOSTART is `0`.

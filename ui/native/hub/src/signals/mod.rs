@@ -326,7 +326,11 @@ pub struct ErrorSignal {
 
 impl ErrorSignal {
     pub fn send(severity: ErrorSeverity, text: impl Into<String>) {
-        ErrorSignal { error: text.into(), severity }.send_signal_to_dart();
+        ErrorSignal {
+            error: text.into(),
+            severity,
+        }
+        .send_signal_to_dart();
     }
 
     pub fn error(err: &anyhow::Error) {

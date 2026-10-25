@@ -1,7 +1,7 @@
 //! The local Anthropic-compatible HTTP server.
 
-use std::convert::Infallible;
 use std::collections::HashMap;
+use std::convert::Infallible;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
@@ -27,13 +27,14 @@ use crate::auth::google::GoogleAuth;
 use crate::auth::openai::OpenAiAuth;
 use crate::config;
 use crate::error::ProxyError;
-use crate::{families, geo};
 use crate::providers::anthropic;
 use crate::providers::codex::{self, CodexAuth};
 use crate::providers::gemini::{self, GeminiAuth};
+use crate::providers::openai_compat;
 use crate::providers::reasoning_cache::ReasoningCache;
 use crate::request_log::{RequestLog, Tracker};
 use crate::routing::{self, Provider, Target};
+use crate::{families, geo};
 
 /// Header the CLI and UI send to the control endpoints (/_shutdown, /_model). A custom header cannot be sent cross-origin
 /// without a CORS preflight, so web pages cannot stop the proxy.
@@ -98,9 +99,16 @@ pub async fn serve(port: u16, default: Option<Target>) -> anyhow::Result<()> {
     let listener = TcpListener::bind(("127.0.0.1", port))
         .await
         .with_context(|| format!("cannot listen on 127.0.0.1:{port}"))?;
-    info!(pid = std::process::id(), "listening on http://127.0.0.1:{port}");
+    info!(
+        pid = std::process::id(),
+        "listening on http://127.0.0.1:{port}"
+    );
     if let Some(active) = state.active.read().unwrap().as_ref() {
-        info!("default model: {}:{}", active.provider.as_str(), active.model);
+        info!(
+            "default model: {}:{}",
+            active.provider.as_str(),
+            active.model
+        );
     }
 
     tokio::select! {
@@ -127,10 +135,21 @@ async fn terminate() {
 /// Rejects requests whose Host is not this loopback address, which defeats DNS rebinding:
 /// a web page must not be able to spend the user's subscriptions through the proxy.
 async fn check_host(State(state): State<Arc<AppState>>, req: Request, next: Next) -> Response {
-    let host = req.headers().get(header::HOST).and_then(|h| h.to_str().ok()).unwrap_or_default();
-    let allowed = [format!("127.0.0.1:{}", state.port), format!("localhost:{}", state.port)];
+    let host = req
+        .headers()
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or_default();
+    let allowed = [
+        format!("127.0.0.1:{}", state.port),
+        format!("localhost:{}", state.port),
+    ];
     if !allowed.iter().any(|a| a == host) {
-        return ProxyError::new(StatusCode::FORBIDDEN, format!("unexpected Host header: {host}")).into_response();
+        return ProxyError::new(
+            StatusCode::FORBIDDEN,
+            format!("unexpected Host header: {host}"),
+        )
+        .into_response();
     }
     next.run(req).await
 }
@@ -152,11 +171,17 @@ fn control_allowed(headers: &HeaderMap) -> Result<(), ProxyError> {
     if headers.contains_key(SHUTDOWN_HEADER) {
         Ok(())
     } else {
-        Err(ProxyError::new(StatusCode::FORBIDDEN, format!("missing {SHUTDOWN_HEADER} header")))
+        Err(ProxyError::new(
+            StatusCode::FORBIDDEN,
+            format!("missing {SHUTDOWN_HEADER} header"),
+        ))
     }
 }
 
-async fn shutdown(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Result<StatusCode, ProxyError> {
+async fn shutdown(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ProxyError> {
     control_allowed(&headers)?;
     state.shutdown.notify_one();
     Ok(StatusCode::OK)
@@ -174,14 +199,22 @@ async fn pin_model(
 ) -> Result<Json<Target>, ProxyError> {
     control_allowed(&headers)?;
     let defaults = state.active.read().unwrap().clone();
-    let target = routing::resolve(&body.model, defaults.as_ref()).map_err(ProxyError::bad_request)?;
-    info!("model pinned to {}:{}", target.provider.as_str(), target.model);
+    let target =
+        routing::resolve(&body.model, defaults.as_ref()).map_err(ProxyError::bad_request)?;
+    info!(
+        "model pinned to {}:{}",
+        target.provider.as_str(),
+        target.model
+    );
     *state.pinned.write().unwrap() = Some(target.clone());
     *state.active.write().unwrap() = Some(target.clone());
     Ok(Json(target))
 }
 
-async fn unpin_model(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Result<StatusCode, ProxyError> {
+async fn unpin_model(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ProxyError> {
     control_allowed(&headers)?;
     info!("model unpinned; following Claude Code's /model again");
     *state.pinned.write().unwrap() = None;
@@ -191,14 +224,26 @@ async fn unpin_model(State(state): State<Arc<AppState>>, headers: HeaderMap) -> 
 /// Request log as SSE: recent records first, then every update. The CLI-independent UI reads this.
 async fn events(State(state): State<Arc<AppState>>) -> Response {
     let (recent, rx) = state.log.subscribe();
-    let live = tokio_stream::wrappers::BroadcastStream::new(rx).filter_map(|r| async move { r.ok() });
+    let live =
+        tokio_stream::wrappers::BroadcastStream::new(rx).filter_map(|r| async move { r.ok() });
     let records = stream::iter(recent).chain(live).map(|record| {
-        Ok::<_, Infallible>(SseEvent::default().event("request").data(serde_json::to_string(&record).unwrap_or_default()))
+        Ok::<_, Infallible>(
+            SseEvent::default()
+                .event("request")
+                .data(serde_json::to_string(&record).unwrap_or_default()),
+        )
     });
-    Sse::new(records).keep_alive(KeepAlive::default()).into_response()
+    Sse::new(records)
+        .keep_alive(KeepAlive::default())
+        .into_response()
 }
 
-async fn messages(State(state): State<Arc<AppState>>, uri: Uri, headers: HeaderMap, body: Bytes) -> Response {
+async fn messages(
+    State(state): State<Arc<AppState>>,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
     let raw: Value = match serde_json::from_slice(&body) {
         Ok(raw) => raw,
         Err(e) => return ProxyError::from(e).into_response(),
@@ -212,7 +257,17 @@ async fn messages(State(state): State<Arc<AppState>>, uri: Uri, headers: HeaderM
         state.log.publish(tracker.failed(&e));
         return e.into_response();
     }
-    match route_message(state.clone(), headers, uri.query(), raw, requested, stream, tracker).await {
+    match route_message(
+        state.clone(),
+        headers,
+        uri.query(),
+        raw,
+        requested,
+        stream,
+        tracker,
+    )
+    .await
+    {
         Ok(resp) => resp,
         Err(failed) => {
             let (e, tracker) = *failed;
@@ -234,9 +289,14 @@ async fn route_message(
 ) -> Result<Response, Box<(ProxyError, Tracker)>> {
     let pinned = state.pinned.read().unwrap().clone();
     let is_internal = requested.to_ascii_lowercase().starts_with("claude-");
-    let session = headers.get(SESSION_HEADER).and_then(|v| v.to_str().ok()).map(String::from);
+    let session = headers
+        .get(SESSION_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(String::from);
     let active = || {
-        let own = session.as_ref().and_then(|s| state.sessions.lock().unwrap().get(s).cloned());
+        let own = session
+            .as_ref()
+            .and_then(|s| state.sessions.lock().unwrap().get(s).cloned());
         own.or_else(|| state.active.read().unwrap().clone())
     };
     let target = match pinned {
@@ -280,7 +340,9 @@ async fn route_message(
     if target.provider == Provider::Anthropic {
         return match anthropic::passthrough(&state, raw, &target.model, &headers, query).await {
             Ok(resp) => {
-                state.log.publish(tracker.passed_through(resp.status().as_u16()));
+                state
+                    .log
+                    .publish(tracker.passed_through(resp.status().as_u16()));
                 Ok(resp)
             }
             Err(e) => Err(Box::new((e, tracker))),
@@ -295,19 +357,43 @@ async fn route_message(
         req.prefer_native_search();
     }
 
-    let missing_key = |name: &str| ProxyError::unauthorized(format!("{name} is not set (environment or ~/.claude-bridge/.env)"));
+    let missing_key = |name: &str| {
+        ProxyError::unauthorized(format!(
+            "{name} is not set (environment or ~/.claude-bridge/.env)"
+        ))
+    };
     let (tx, rx) = mpsc::channel(64);
     let writer = MessageWriter::new(tx.clone(), target.model.clone());
     let key = |name: &str| config::env(name).ok_or_else(|| missing_key(name));
     let provider: BoxFuture<'static, Result<Outcome, ProxyError>> = match target.provider {
-        Provider::CodexOauth => codex::run(state.clone(), req, target, CodexAuth::ChatGpt, writer).boxed(),
+        Provider::CodexOauth => {
+            codex::run(state.clone(), req, target, CodexAuth::ChatGpt, writer).boxed()
+        }
         Provider::Openai => match key("OPENAI_API_KEY") {
-            Ok(key) => codex::run(state.clone(), req, target, CodexAuth::ApiKey(key), writer).boxed(),
+            Ok(key) => {
+                codex::run(state.clone(), req, target, CodexAuth::ApiKey(key), writer).boxed()
+            }
             Err(e) => return Err(Box::new((e, tracker))),
         },
-        Provider::GeminiOauth => gemini::run(state.clone(), req, target, GeminiAuth::OAuth, writer).boxed(),
+        Provider::OpenaiCompat => match config::env("OPENAI_COMPAT_BASE_URL") {
+            Some(base) => openai_compat::run(
+                state.clone(),
+                req,
+                target,
+                base,
+                config::env("OPENAI_COMPAT_API_KEY"),
+                writer,
+            )
+            .boxed(),
+            None => return Err(Box::new((missing_key("OPENAI_COMPAT_BASE_URL"), tracker))),
+        },
+        Provider::GeminiOauth => {
+            gemini::run(state.clone(), req, target, GeminiAuth::OAuth, writer).boxed()
+        }
         Provider::Gemini => match key("GEMINI_API_KEY") {
-            Ok(key) => gemini::run(state.clone(), req, target, GeminiAuth::ApiKey(key), writer).boxed(),
+            Ok(key) => {
+                gemini::run(state.clone(), req, target, GeminiAuth::ApiKey(key), writer).boxed()
+            }
             Err(e) => return Err(Box::new((e, tracker))),
         },
         Provider::Anthropic => unreachable!("handled above"),
@@ -340,18 +426,26 @@ async fn respond(mut rx: mpsc::Receiver<Result<Event, ProxyError>>, stream: bool
     };
 
     if stream {
-        let events = stream::once(async move { Ok(first) }).chain(ReceiverStream::new(rx)).map(|item| {
-            let sse = match item {
-                Ok(event) => SseEvent::default().event(event.name()).data(event.to_json().to_string()),
-                Err(e) => {
-                    warn!("{e}");
-                    SseEvent::default().event("error").data(e.body().to_string())
-                }
-            };
-            Ok::<_, Infallible>(sse)
-        });
+        let events = stream::once(async move { Ok(first) })
+            .chain(ReceiverStream::new(rx))
+            .map(|item| {
+                let sse = match item {
+                    Ok(event) => SseEvent::default()
+                        .event(event.name())
+                        .data(event.to_json().to_string()),
+                    Err(e) => {
+                        warn!("{e}");
+                        SseEvent::default()
+                            .event("error")
+                            .data(e.body().to_string())
+                    }
+                };
+                Ok::<_, Infallible>(sse)
+            });
         // Keep-alive comments hold the connection open through long reasoning pauses.
-        return Sse::new(events).keep_alive(KeepAlive::default()).into_response();
+        return Sse::new(events)
+            .keep_alive(KeepAlive::default())
+            .into_response();
     }
 
     let mut agg = Aggregator::default();

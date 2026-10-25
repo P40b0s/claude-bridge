@@ -7,6 +7,7 @@
 - **Codex** — GPT-5.6 Sol / Terra / Luna и GPT-5.5 по подписке ChatGPT (вход через браузер или токены Codex CLI);
 - **Gemini** — через вход в Google (Code Assist) или по `GEMINI_API_KEY`;
 - **OpenAI API** — по `OPENAI_API_KEY`;
+- **OpenAI-compatible** — OpenRouter, Ollama, vLLM, LM Studio, DeepSeek и другие Chat Completions API;
 - **Anthropic API** — по `ANTHROPIC_API_KEY`.
 
 Claude Code шлёт запросы на `http://127.0.0.1:17870/v1/messages`. Прокси переводит их в формат провайдера и возвращает ответ в виде SSE в формате Anthropic. Поддерживаются стриминг и обычные ответы, tool use, картинки, блоки thinking и встроенный веб-поиск провайдера. Модель можно сменить посреди сессии через `/model`, а для всех сессий сразу — из CLI или UI. Ненужных провайдеров можно отключить, а проксирование — разрешить только из выбранных стран.
@@ -78,7 +79,7 @@ claude-bridge anthropic      # Claude Opus: вход Claude Code или ANTHROPI
 
 Ещё варианты:
 - **Суффикс усилия.** `@low|medium|high|xhigh|max` работает с любой моделью, например `/model terra@max` или `/model gemini-flash@low`.
-- **Явный провайдер.** `провайдер:модель`, где провайдер — `codex-oauth`, `openai`, `gemini-oauth`, `gemini` или `anthropic`.
+- **Явный провайдер.** `провайдер:модель`, где провайдер — `codex-oauth`, `openai`, `openai-compat`, `gemini-oauth`, `gemini` или `anthropic`. Для совместимого API: `/model openai-compat:llama3.3`.
 - **Имя без провайдера** уходит текущему провайдеру как есть.
 
 Claude Code сам делает служебные запросы к `claude-haiku-*` и `claude-sonnet-*`: заголовки, сабагенты, проверки. Прокси отправляет их провайдеру основной модели сессии (на его быструю модель), поэтому ключ Anthropic для них не нужен. В Claude они идут, только если основная модель сессии — Claude (`anthropic:…`).
@@ -111,12 +112,12 @@ Claude Code сам делает служебные запросы к `claude-hai
 
 ## Провайдеры
 
-На вкладке «Провайдеры» каждую группу можно отключить: Anthropic (Claude), ChatGPT / Codex, OpenAI API, Google (Gemini, оба аккаунта и `GEMINI_API_KEY`). Отключённый провайдер:
+На вкладке «Провайдеры» каждую группу можно отключить: Anthropic (Claude), ChatGPT / Codex, OpenAI API, OpenAI-compatible, Google (Gemini, оба аккаунта и `GEMINI_API_KEY`). Отключённый провайдер:
 - пропадает из UI: аккаунтов, лимитов, списка моделей, настроек и журнала запросов; его лимиты не запрашиваются;
 - не выбирается моделью по умолчанию, когда UI запускает прокси;
 - блокируется прокси: на запрос к нему (например, `/model gemini`) приходит ошибка 400 с подсказкой.
 
-Входы и ключи при этом сохраняются. Список хранится в `CLAUDE_BRIDGE_DISABLED_PROVIDERS` (`anthropic`, `codex`, `openai`, `gemini` через запятую) и применяется сразу, без перезапуска.
+Входы и ключи при этом сохраняются. Список хранится в `CLAUDE_BRIDGE_DISABLED_PROVIDERS` (`anthropic`, `codex`, `openai`, `openai-compat`, `gemini` через запятую) и применяется сразу, без перезапуска.
 
 ## Местоположение и ограничение по стране
 
@@ -170,6 +171,9 @@ UI ищет CLI в таком порядке: рядом со своим исп�
 | Переменная | Назначение |
 | --- | --- |
 | `OPENAI_API_KEY`, `GEMINI_API_KEY`, `ANTHROPIC_API_KEY` | ключи для маршрутов по API |
+| `OPENAI_COMPAT_BASE_URL` | адрес OpenAI-совместимого API; `/chat/completions` добавляется автоматически |
+| `OPENAI_COMPAT_API_KEY` | необязательный ключ OpenAI-совместимого API |
+| `OPENAI_COMPAT_DEFAULT_MODEL` | модель, с которой UI запускает совместимый провайдер |
 | `CLAUDE_BRIDGE_PORT` | порт прокси, по умолчанию `17870` |
 | `CODEX_REASONING_EFFORT` | усилие Codex, если не указан `@суффикс`; по умолчанию `high` |
 | `CODEX_REASONING_SUMMARY` | `auto` / `concise` / `detailed` / `none` |

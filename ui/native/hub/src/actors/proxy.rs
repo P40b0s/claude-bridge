@@ -11,8 +11,8 @@ use tokio::task::{JoinHandle, JoinSet};
 use crate::configuration;
 use crate::i18n::{is_russian, tr};
 use crate::signals::{
-    ConnectClaudeCode, ErrorSeverity, ErrorSignal, ModelInfo, PinModel, ProxyAction, ProxyCommand, ProxyState,
-    RequestLogReset, RequestLogged,
+    ConnectClaudeCode, ErrorSeverity, ErrorSignal, ModelInfo, PinModel, ProxyAction, ProxyCommand,
+    ProxyState, RequestLogReset, RequestLogged,
 };
 
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
@@ -41,7 +41,13 @@ impl ProxyActor {
         owned_tasks.spawn(super::forward::<PinModel, _>(self_addr.clone()));
         owned_tasks.spawn(super::forward::<ConnectClaudeCode, _>(self_addr.clone()));
         owned_tasks.spawn(Self::poll_timer(self_addr));
-        Self { last_state: None, busy: false, autostart_checked: false, events: None, _owned_tasks: owned_tasks }
+        Self {
+            last_state: None,
+            busy: false,
+            autostart_checked: false,
+            events: None,
+            _owned_tasks: owned_tasks,
+        }
     }
 
     async fn poll_timer(mut self_addr: Address<Self>) {
@@ -68,8 +74,14 @@ impl ProxyActor {
             port: i32::from(port),
             pid: health.as_ref().map(|h| i64::from(h.pid)),
             started_at: health.as_ref().map(|h| h.started_at),
-            active: health.as_ref().and_then(|h| h.active.as_ref()).map(ModelInfo::from),
-            pinned: health.as_ref().and_then(|h| h.pinned.as_ref()).map(ModelInfo::from),
+            active: health
+                .as_ref()
+                .and_then(|h| h.active.as_ref())
+                .map(ModelInfo::from),
+            pinned: health
+                .as_ref()
+                .and_then(|h| h.pinned.as_ref())
+                .map(ModelInfo::from),
             cli_path: configuration::cli_path().map(|p| p.display().to_string()),
             busy: self.busy,
             claude_code_connected: connection == Connection::Connected,
@@ -90,7 +102,11 @@ impl ProxyActor {
     /// Keeps exactly one request log subscription, to the proxy process currently running.
     fn follow_events(&mut self, port: u16, health: Option<&control::Health>) {
         let pid = health.map(|h| h.pid);
-        let current = self.events.as_ref().filter(|(_, task)| !task.is_finished()).map(|(pid, _)| *pid);
+        let current = self
+            .events
+            .as_ref()
+            .filter(|(_, task)| !task.is_finished())
+            .map(|(pid, _)| *pid);
         if current == pid {
             return;
         }
@@ -104,7 +120,10 @@ impl ProxyActor {
                 Ok(stream) => {
                     let mut stream = std::pin::pin!(stream);
                     while let Some(record) = stream.next().await {
-                        RequestLogged { entry: record.into() }.send_signal_to_dart();
+                        RequestLogged {
+                            entry: record.into(),
+                        }
+                        .send_signal_to_dart();
                     }
                 }
                 Err(e) => tracing::warn!("request log subscription failed: {e:#}"),
@@ -114,18 +133,26 @@ impl ProxyActor {
     }
 
     /// Proxy default when the UI starts it: the first provider the user can actually use.
-    fn default_model() -> &'static str {
+    fn default_model() -> String {
         let on = |family: &str| !families::is_disabled(family);
-        if on("anthropic") && (auth::claude_code::account().is_some() || configuration::setting("ANTHROPIC_API_KEY").is_some()) {
-            "anthropic:claude-opus-5-5"
+        if on("anthropic")
+            && (auth::claude_code::account().is_some()
+                || configuration::setting("ANTHROPIC_API_KEY").is_some())
+        {
+            "anthropic:claude-opus-5-5".into()
         } else if on("codex") && auth::openai::load().is_some() {
-            "codex-oauth:gpt-5.6-sol"
+            "codex-oauth:gpt-5.6-sol".into()
         } else if on("gemini") && auth::google::load(1).is_some() {
-            "gemini-oauth:gemini-3.1-pro-preview"
+            "gemini-oauth:gemini-3.1-pro-preview".into()
         } else if on("gemini") && configuration::setting("GEMINI_API_KEY").is_some() {
-            "gemini:gemini-3.1-pro-preview"
+            "gemini:gemini-3.1-pro-preview".into()
+        } else if on("openai-compat")
+            && configuration::setting("OPENAI_COMPAT_BASE_URL").is_some()
+            && let Some(model) = configuration::setting("OPENAI_COMPAT_DEFAULT_MODEL")
+        {
+            format!("openai-compat:{model}")
         } else {
-            "openai:gpt-5.5"
+            "openai:gpt-5.5".into()
         }
     }
 
@@ -134,14 +161,25 @@ impl ProxyActor {
         match action {
             ProxyAction::Stop => {
                 control::stop(port).await?;
-                ErrorSignal::send(ErrorSeverity::Info, tr("Прокси остановлен", "Proxy stopped"));
+                ErrorSignal::send(
+                    ErrorSeverity::Info,
+                    tr("Прокси остановлен", "Proxy stopped"),
+                );
             }
             ProxyAction::Start | ProxyAction::Restart => {
-                let cli = configuration::cli_path()
-                    .ok_or_else(|| anyhow::anyhow!(tr("Не найден бинарник claude-bridge: укажите путь в настройках", "claude-bridge binary not found: set its path in the settings").to_string()))?;
+                let cli = configuration::cli_path().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        tr(
+                            "Не найден бинарник claude-bridge: укажите путь в настройках",
+                            "claude-bridge binary not found: set its path in the settings"
+                        )
+                        .to_string()
+                    )
+                })?;
                 let restart = matches!(action, ProxyAction::Restart);
                 let pinned = control::health(port).await.and_then(|h| h.pinned);
-                let health = control::ensure_proxy(&cli, port, Self::default_model(), restart).await?;
+                let default_model = Self::default_model();
+                let health = control::ensure_proxy(&cli, port, &default_model, restart).await?;
                 // A restart should not silently drop the model the user pinned.
                 if restart && let Some(pinned) = pinned {
                     let spec = format!("{}:{}", pinned.provider.as_str(), pinned.model);
@@ -157,7 +195,10 @@ impl ProxyActor {
                     (false, true) => "Proxy restarted",
                     (false, false) => "Proxy started",
                 };
-                ErrorSignal::send(ErrorSeverity::Success, format!("{text} (PID {})", health.pid));
+                ErrorSignal::send(
+                    ErrorSeverity::Success,
+                    format!("{text} (PID {})", health.pid),
+                );
             }
         }
         Ok(())
@@ -171,8 +212,15 @@ impl Notifiable<Poll> for ProxyActor {
         if !self.autostart_checked {
             self.autostart_checked = true;
             // `claude` pointed at the proxy does not answer without it.
-            if health.is_none() && configuration::autostart() && configuration::cli_path().is_some() {
-                self.notify(ProxyCommand { action: ProxyAction::Start }, ctx).await;
+            if health.is_none() && configuration::autostart() && configuration::cli_path().is_some()
+            {
+                self.notify(
+                    ProxyCommand {
+                        action: ProxyAction::Start,
+                    },
+                    ctx,
+                )
+                .await;
             }
         }
     }
@@ -197,10 +245,23 @@ impl Notifiable<PinModel> for ProxyActor {
         let port = configuration::port();
         let result = match &msg.model {
             Some(model) => control::pin_model(port, model).await.map(|t| {
-                let effort = t.reasoning.map(|r| format!(" @{}", r.as_str())).unwrap_or_default();
-                format!("{} {}{effort}", tr("Все сессии переключены на", "All sessions switched to"), t.model)
+                let effort = t
+                    .reasoning
+                    .map(|r| format!(" @{}", r.as_str()))
+                    .unwrap_or_default();
+                format!(
+                    "{} {}{effort}",
+                    tr("Все сессии переключены на", "All sessions switched to"),
+                    t.model
+                )
             }),
-            None => control::unpin_model(port).await.map(|_| tr("Модель снова выбирается через /model", "The model is picked with /model again").to_string()),
+            None => control::unpin_model(port).await.map(|_| {
+                tr(
+                    "Модель снова выбирается через /model",
+                    "The model is picked with /model again",
+                )
+                .to_string()
+            }),
         };
         match result {
             Ok(text) => ErrorSignal::send(ErrorSeverity::Success, text),
@@ -221,11 +282,17 @@ impl Notifiable<ConnectClaudeCode> for ProxyActor {
         match result {
             Ok(()) if msg.connect => ErrorSignal::send(
                 ErrorSeverity::Success,
-                tr("Claude Code подключен к прокси. Действует на новые сессии claude", "Claude Code now goes through the proxy. Applies to new claude sessions"),
+                tr(
+                    "Claude Code подключен к прокси. Действует на новые сессии claude",
+                    "Claude Code now goes through the proxy. Applies to new claude sessions",
+                ),
             ),
             Ok(()) => ErrorSignal::send(
                 ErrorSeverity::Success,
-                tr("Claude Code снова работает напрямую. Действует на новые сессии", "Claude Code talks to Anthropic directly again. Applies to new sessions"),
+                tr(
+                    "Claude Code снова работает напрямую. Действует на новые сессии",
+                    "Claude Code talks to Anthropic directly again. Applies to new sessions",
+                ),
             ),
             Err(e) => ErrorSignal::error(&e),
         }
