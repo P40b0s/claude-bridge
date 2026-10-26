@@ -92,11 +92,18 @@ fn text_part(role: &str, text: &str) -> Value {
     json!({ "type": kind, "text": text })
 }
 
-/// Cached reasoning items come first, then each message; tool calls and results become
-/// top-level items after the message text they belong to.
+/// Each message in order; tool calls and results become top-level items after the message
+/// text they belong to. Cached reasoning goes right before the last assistant turn, the one
+/// that produced it: it changes every turn, so anywhere earlier it would break the prompt
+/// cache for the whole history after it. With no assistant turn there is nothing to attach it to.
 pub fn to_responses_input(messages: &[&Message], injected_reasoning: Vec<Value>) -> Vec<Value> {
-    let mut out = injected_reasoning;
-    for m in messages {
+    let mut out = Vec::new();
+    let last_assistant = messages.iter().rposition(|m| m.role == "assistant");
+    let mut injected_reasoning = Some(injected_reasoning);
+    for (i, m) in messages.iter().enumerate() {
+        if Some(i) == last_assistant {
+            out.extend(injected_reasoning.take().unwrap_or_default());
+        }
         let role = input_role(&m.role);
         let blocks = match &m.content {
             Content::Text(text) => {
@@ -226,7 +233,10 @@ pub async fn run(
     };
 
     let messages = normalize_messages(&req.messages);
-    let convo_key = conversation_key(&req.messages);
+    // Per model: encrypted reasoning from one model is useless to another, and Claude Code's
+    // internal calls on the fast model must not overwrite the main model's entry.
+    let thread = conversation_key(&req.messages);
+    let convo_key = format!("{}:{thread}", target.model);
     let cache_enabled = config::env("CODEX_DISABLE_REASONING_CACHE").as_deref() != Some("1");
     let cached = if cache_enabled { state.reasoning_cache.get(&convo_key) } else { Vec::new() };
     let cached_count = cached.len();
@@ -249,7 +259,7 @@ pub async fn run(
         "store": false,
         "stream": true,
         "include": ["reasoning.encrypted_content"],
-        "prompt_cache_key": thread_id(&convo_key),
+        "prompt_cache_key": thread_id(&thread),
     });
     if let Some(verbosity) = text_verbosity() {
         body["text"] = json!({ "verbosity": verbosity });
@@ -602,12 +612,22 @@ mod tests {
     }
 
     #[test]
-    fn cached_reasoning_is_prepended() {
-        let m = msgs(json!([{ "role": "user", "content": "q" }]));
+    fn cached_reasoning_goes_before_last_assistant_turn() {
+        let m = msgs(json!([
+            { "role": "user", "content": "q1" },
+            { "role": "assistant", "content": "a1" },
+            { "role": "user", "content": "q2" },
+            { "role": "assistant", "content": "a2" },
+            { "role": "user", "content": "q3" }
+        ]));
         let cached = vec![json!({ "type": "reasoning", "summary": [], "encrypted_content": "enc" })];
+        let out = to_responses_input(&m.iter().collect::<Vec<_>>(), cached.clone());
+        let kinds: Vec<&str> = out.iter().map(|i| i["role"].as_str().unwrap_or("reasoning")).collect();
+        assert_eq!(kinds, vec!["user", "assistant", "user", "reasoning", "assistant", "user"]);
+
+        let m = msgs(json!([{ "role": "user", "content": "q" }]));
         let out = to_responses_input(&m.iter().collect::<Vec<_>>(), cached);
-        assert_eq!(out[0]["type"], "reasoning");
-        assert_eq!(out[1]["type"], "message");
+        assert_eq!(out.len(), 1, "no assistant turn to attach reasoning to");
     }
 
     #[test]
