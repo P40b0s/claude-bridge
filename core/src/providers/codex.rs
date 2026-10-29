@@ -21,6 +21,9 @@ const CHATGPT_CODEX_BASE: &str = "https://chatgpt.com/backend-api/codex";
 const ORIGINATOR: &str = "codex_cli_rs";
 const DEFAULT_CODEX_CLI_VERSION: &str = "0.144.1";
 const CONNECT_ATTEMPTS: u32 = 3;
+/// Sticky-routing token the backend hands out on a turn's first response; replaying it keeps
+/// the rest of the turn on the replica that holds the prompt cache.
+const TURN_STATE_HEADER: &str = "x-codex-turn-state";
 
 pub enum CodexAuth {
     ChatGpt,
@@ -143,6 +146,14 @@ pub fn to_responses_input(messages: &[&Message], injected_reasoning: Vec<Value>)
     out
 }
 
+/// A request that answers a fresh user message rather than continuing a tool loop.
+fn starts_user_turn(messages: &[Message]) -> bool {
+    match messages.iter().rev().find(|m| m.role == "user").map(|m| &m.content) {
+        Some(Content::Blocks(blocks)) => !blocks.iter().any(|b| matches!(b, Block::ToolResult { .. })),
+        _ => true,
+    }
+}
+
 const COMPACTION_MARKERS: [&str; 2] =
     ["CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.", "Your task is to create a detailed summary of"];
 
@@ -243,6 +254,10 @@ pub async fn run(
     let input = to_responses_input(&messages, cached);
     let item_count = input.len();
     let effort = effective_effort(&req, target.reasoning);
+    // ChatGPT picks the cache replica from the session-id header, not from prompt_cache_key;
+    // without it requests scatter and only hit whatever prefix each replica saw last.
+    let session_id = thread_id(&thread);
+    let turn_state = state.reasoning_cache.turn_state(&convo_key, starts_user_turn(&req.messages));
 
     let mut reasoning = json!({ "effort": effort });
     if let Some(summary) = reasoning_summary() {
@@ -259,7 +274,7 @@ pub async fn run(
         "store": false,
         "stream": true,
         "include": ["reasoning.encrypted_content"],
-        "prompt_cache_key": thread_id(&thread),
+        "prompt_cache_key": session_id,
     });
     if let Some(verbosity) = text_verbosity() {
         body["text"] = json!({ "verbosity": verbosity });
@@ -276,6 +291,7 @@ pub async fn run(
         effort,
         items = item_count,
         cached_reasoning = cached_count,
+        sticky = turn_state.is_some(),
         compaction = is_compaction_request(&req),
         req_kib = body.len() / 1024,
         "codex request"
@@ -293,7 +309,16 @@ pub async fn run(
             .header("originator", ORIGINATOR)
             .header("user-agent", user_agent())
             .header("openai-beta", "responses=experimental")
+            .header("session-id", &session_id)
+            .header("thread-id", &session_id)
+            .header("x-client-request-id", &session_id)
             .body(body.clone());
+        if backend == "chatgpt" {
+            rb = rb.header("x-codex-routing-hint", format!("model={}", target.model));
+        }
+        if let Some(turn_state) = &turn_state {
+            rb = rb.header(TURN_STATE_HEADER, turn_state);
+        }
         if let Some(id) = &install_id {
             rb = rb.header("x-codex-installation-id", id);
         }
@@ -317,6 +342,9 @@ pub async fn run(
         let status = resp.status().as_u16();
         let text = resp.text().await.unwrap_or_default();
         return Err(ProxyError::upstream("OpenAI", status, &text));
+    }
+    if let Some(value) = resp.headers().get(TURN_STATE_HEADER).and_then(|v| v.to_str().ok()) {
+        state.reasoning_cache.set_turn_state(&convo_key, value.to_string());
     }
 
     let mut pump = Pump::new(w);
@@ -609,6 +637,16 @@ mod tests {
         ]}]));
         assert_eq!(out.len(), 1);
         assert_eq!(out[0]["content"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn tool_results_continue_the_user_turn() {
+        assert!(starts_user_turn(&msgs(json!([{ "role": "user", "content": "q" }]))));
+        assert!(!starts_user_turn(&msgs(json!([
+            { "role": "user", "content": "q" },
+            { "role": "assistant", "content": [{ "type": "tool_use", "id": "t1", "name": "Read", "input": {} }] },
+            { "role": "user", "content": [{ "type": "tool_result", "tool_use_id": "t1", "content": "ok" }] }
+        ]))));
     }
 
     #[test]

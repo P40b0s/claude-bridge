@@ -2,7 +2,8 @@
 //!
 //! Echoing `encrypted_content` back on the next turn gives the model its prior chain of
 //! thought. Claude Code knows nothing about these blobs, so conversations are keyed by a
-//! hash of the first user turn.
+//! hash of the first user turn. Each entry also keeps the backend's `x-codex-turn-state`
+//! sticky-routing token for the user turn in progress.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -17,6 +18,7 @@ const TTL: Duration = Duration::from_secs(30 * 60);
 
 struct Entry {
     items: Vec<Value>,
+    turn_state: Option<String>,
     last_access: Instant,
 }
 
@@ -39,9 +41,31 @@ impl ReasoningCache {
     }
 
     pub fn set(&self, key: &str, items: Vec<Value>) {
+        self.update(key, |e| e.items = items);
+    }
+
+    /// The turn-state token for `key`; a new user turn drops the previous turn's token.
+    pub fn turn_state(&self, key: &str, new_turn: bool) -> Option<String> {
         let mut entries = self.entries.lock().unwrap();
         reap(&mut entries);
-        entries.insert(key.to_string(), Entry { items, last_access: Instant::now() });
+        let e = entries.get_mut(key)?;
+        if new_turn {
+            e.turn_state = None;
+        }
+        e.turn_state.clone()
+    }
+
+    pub fn set_turn_state(&self, key: &str, state: String) {
+        self.update(key, |e| e.turn_state = Some(state));
+    }
+
+    fn update(&self, key: &str, f: impl FnOnce(&mut Entry)) {
+        let mut entries = self.entries.lock().unwrap();
+        reap(&mut entries);
+        let now = Instant::now();
+        let e = entries.entry(key.to_string()).or_insert_with(|| Entry { items: Vec::new(), turn_state: None, last_access: now });
+        f(e);
+        e.last_access = now;
     }
 }
 
@@ -88,6 +112,16 @@ mod tests {
 
     fn user(text: &str) -> Message {
         Message { role: "user".into(), content: Content::Text(text.into()) }
+    }
+
+    #[test]
+    fn turn_state_survives_reasoning_updates_until_next_user_turn() {
+        let cache = ReasoningCache::default();
+        cache.set_turn_state("k", "ts".into());
+        cache.set("k", vec![Value::Null]);
+        assert_eq!(cache.turn_state("k", false).as_deref(), Some("ts"));
+        assert_eq!(cache.turn_state("k", true), None);
+        assert_eq!(cache.get("k").len(), 1);
     }
 
     #[test]
