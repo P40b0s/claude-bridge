@@ -1,6 +1,7 @@
 //! Anthropic Messages → OpenAI Responses API, the wire format the Codex CLI uses.
 //! ChatGPT login goes to the ChatGPT Codex backend, an API key to api.openai.com.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -9,7 +10,7 @@ use futures_util::StreamExt;
 use serde_json::{Value, json};
 use tracing::{info, warn};
 
-use super::reasoning_cache::{conversation_key, thread_id};
+use super::reasoning_cache::{conversation_key, message_step_key, step_key, thread_id};
 use crate::anthropic::{Block, Content, ImageSource, Message, MessageWriter, MessagesRequest, Outcome, Tool, ToolChoice, Usage};
 use crate::config;
 use crate::error::ProxyError;
@@ -69,19 +70,6 @@ fn input_role(role: &str) -> &'static str {
     }
 }
 
-/// Moves trailing developer messages before the last actionable message, so the
-/// conversation still ends on the turn the model has to answer.
-pub fn normalize_messages(messages: &[Message]) -> Vec<&Message> {
-    let trailing = messages.iter().rev().take_while(|m| input_role(&m.role) == "developer").count();
-    let mut out: Vec<&Message> = messages.iter().collect();
-    if trailing == 0 || trailing == messages.len() {
-        return out;
-    }
-    let actionable = out.remove(messages.len() - trailing - 1);
-    out.push(actionable);
-    out
-}
-
 fn image_url(source: &ImageSource) -> String {
     match source {
         ImageSource::Base64 { media_type, data } => format!("data:{media_type};base64,{data}"),
@@ -95,17 +83,17 @@ fn text_part(role: &str, text: &str) -> Value {
     json!({ "type": kind, "text": text })
 }
 
-/// Each message in order; tool calls and results become top-level items after the message
-/// text they belong to. Cached reasoning goes right before the last assistant turn, the one
-/// that produced it: it changes every turn, so anywhere earlier it would break the prompt
-/// cache for the whole history after it. With no assistant turn there is nothing to attach it to.
-pub fn to_responses_input(messages: &[&Message], injected_reasoning: Vec<Value>) -> Vec<Value> {
+/// Each message in the order Claude Code sent it, never reshuffled: the prompt cache only
+/// reuses an exact prefix of the previous request. Tool calls and results become top-level
+/// items after the message text they belong to, and each assistant step is preceded by the
+/// cached reasoning that produced it.
+pub fn to_responses_input(messages: &[Message], reasoning: &HashMap<String, Vec<Value>>) -> Vec<Value> {
     let mut out = Vec::new();
-    let last_assistant = messages.iter().rposition(|m| m.role == "assistant");
-    let mut injected_reasoning = Some(injected_reasoning);
-    for (i, m) in messages.iter().enumerate() {
-        if Some(i) == last_assistant {
-            out.extend(injected_reasoning.take().unwrap_or_default());
+    for m in messages {
+        if m.role == "assistant"
+            && let Some(items) = reasoning.get(&message_step_key(m))
+        {
+            out.extend(items.iter().cloned());
         }
         let role = input_role(&m.role);
         let blocks = match &m.content {
@@ -243,15 +231,14 @@ pub async fn run(
         }
     };
 
-    let messages = normalize_messages(&req.messages);
     // Per model: encrypted reasoning from one model is useless to another, and Claude Code's
     // internal calls on the fast model must not overwrite the main model's entry.
     let thread = conversation_key(&req.messages);
     let convo_key = format!("{}:{thread}", target.model);
     let cache_enabled = config::env("CODEX_DISABLE_REASONING_CACHE").as_deref() != Some("1");
-    let cached = if cache_enabled { state.reasoning_cache.get(&convo_key) } else { Vec::new() };
+    let cached = if cache_enabled { state.reasoning_cache.get(&convo_key) } else { HashMap::new() };
     let cached_count = cached.len();
-    let input = to_responses_input(&messages, cached);
+    let input = to_responses_input(&req.messages, &cached);
     let item_count = input.len();
     let effort = effective_effort(&req, target.reasoning);
     // ChatGPT picks the cache replica from the session-id header, not from prompt_cache_key;
@@ -368,7 +355,8 @@ pub async fn run(
         "codex done"
     );
     if !pump.reasoning.is_empty() {
-        state.reasoning_cache.set(&convo_key, std::mem::take(&mut pump.reasoning));
+        let step = step_key(pump.first_call_id.as_deref(), &pump.text);
+        state.reasoning_cache.add_step(&convo_key, step, std::mem::take(&mut pump.reasoning));
     }
     pump.w.finish(pump.stop_reason, pump.usage).await
 }
@@ -385,6 +373,9 @@ pub fn split_input_usage(total: i64, cached: i64) -> (u64, u64) {
 struct Pump {
     w: MessageWriter,
     text_chars: usize,
+    /// The answer text and first tool call id, which identify this step on later requests.
+    text: String,
+    first_call_id: Option<String>,
     tool_calls: usize,
     /// Item id of the function_call whose block is open, and whether any arguments streamed.
     current_tool: Option<(String, bool)>,
@@ -395,11 +386,12 @@ struct Pump {
 
 impl Pump {
     fn new(w: MessageWriter) -> Self {
-        Self { w, text_chars: 0, tool_calls: 0, current_tool: None, stop_reason: "end_turn", usage: Usage::default(), reasoning: Vec::new() }
+        Self { w, text_chars: 0, text: String::new(), first_call_id: None, tool_calls: 0, current_tool: None, stop_reason: "end_turn", usage: Usage::default(), reasoning: Vec::new() }
     }
 
     async fn text(&mut self, text: &str) -> Result<(), ProxyError> {
         self.text_chars += text.len();
+        self.text.push_str(text);
         self.w.text(text).await
     }
 
@@ -454,6 +446,7 @@ impl Pump {
                         let call_id = item["call_id"].as_str().or(item["id"].as_str()).unwrap_or_default().to_string();
                         let item_id = item["id"].as_str().map(String::from).unwrap_or_else(|| call_id.clone());
                         self.w.start_tool(&call_id, item["name"].as_str().unwrap_or_default()).await?;
+                        self.first_call_id.get_or_insert_with(|| call_id.clone());
                         self.current_tool = Some((item_id, false));
                         self.tool_calls += 1;
                         self.stop_reason = "tool_use";
@@ -558,7 +551,7 @@ mod tests {
 
     fn input(v: Value) -> Vec<Value> {
         let m = msgs(v);
-        to_responses_input(&m.iter().collect::<Vec<_>>(), Vec::new())
+        to_responses_input(&m, &HashMap::new())
     }
 
     #[test]
@@ -650,44 +643,28 @@ mod tests {
     }
 
     #[test]
-    fn cached_reasoning_goes_before_last_assistant_turn() {
+    fn each_step_gets_its_own_reasoning_back() {
         let m = msgs(json!([
             { "role": "user", "content": "q1" },
-            { "role": "assistant", "content": "a1" },
-            { "role": "user", "content": "q2" },
-            { "role": "assistant", "content": "a2" },
-            { "role": "user", "content": "q3" }
+            { "role": "assistant", "content": [{ "type": "tool_use", "id": "t1", "name": "Read", "input": {} }] },
+            { "role": "user", "content": [{ "type": "tool_result", "tool_use_id": "t1", "content": "ok" }] },
+            { "role": "system", "content": "ctx" },
+            { "role": "assistant", "content": [{ "type": "text", "text": "a2" }] },
+            { "role": "user", "content": "q3" },
+            { "role": "assistant", "content": "a3" },
+            { "role": "user", "content": "q4" }
         ]));
-        let cached = vec![json!({ "type": "reasoning", "summary": [], "encrypted_content": "enc" })];
-        let out = to_responses_input(&m.iter().collect::<Vec<_>>(), cached.clone());
-        let kinds: Vec<&str> = out.iter().map(|i| i["role"].as_str().unwrap_or("reasoning")).collect();
-        assert_eq!(kinds, vec!["user", "assistant", "user", "reasoning", "assistant", "user"]);
-
-        let m = msgs(json!([{ "role": "user", "content": "q" }]));
-        let out = to_responses_input(&m.iter().collect::<Vec<_>>(), cached);
-        assert_eq!(out.len(), 1, "no assistant turn to attach reasoning to");
-    }
-
-    #[test]
-    fn trailing_developer_context_moves_before_final_prompt() {
-        let m = msgs(json!([
-            { "role": "user", "content": "first" },
-            { "role": "user", "content": "do it" },
-            { "role": "system", "content": "ctx1" },
-            { "role": "developer", "content": "ctx2" }
-        ]));
-        let roles: Vec<String> = normalize_messages(&m)
+        let r = |enc: &str| vec![json!({ "type": "reasoning", "summary": [], "encrypted_content": enc })];
+        let cached = HashMap::from([(step_key(Some("t1"), ""), r("r1")), (step_key(None, "a2"), r("r2"))]);
+        let out = to_responses_input(&m, &cached);
+        let kinds: Vec<String> = out
             .iter()
-            .map(|m| match &m.content {
-                Content::Text(t) => t.clone(),
-                _ => unreachable!(),
-            })
+            .map(|i| i["role"].as_str().or(i["encrypted_content"].as_str()).or(i["type"].as_str()).unwrap().to_string())
             .collect();
-        assert_eq!(roles, vec!["first", "ctx1", "ctx2", "do it"]);
-
-        let m = msgs(json!([{ "role": "system", "content": "a" }, { "role": "user", "content": "b" }]));
-        assert_eq!(normalize_messages(&m).len(), 2);
-        assert!(std::ptr::eq(normalize_messages(&m)[1], &m[1]));
+        assert_eq!(
+            kinds,
+            ["user", "r1", "function_call", "function_call_output", "developer", "r2", "assistant", "user", "assistant", "user"]
+        );
     }
 
     #[test]

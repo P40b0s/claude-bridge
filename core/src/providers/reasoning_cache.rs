@@ -1,8 +1,10 @@
 //! Per-conversation cache of the Responses API's encrypted reasoning items.
 //!
-//! Echoing `encrypted_content` back on the next turn gives the model its prior chain of
-//! thought. Claude Code knows nothing about these blobs, so conversations are keyed by a
-//! hash of the first user turn. Each entry also keeps the backend's `x-codex-turn-state`
+//! Echoing `encrypted_content` back gives the model its prior chain of thought. Claude Code
+//! knows nothing about these blobs, so conversations are keyed by a hash of the first user
+//! turn, and within one the reasoning is kept per assistant step (see [`step_key`]) so every
+//! step gets its own back in place: the input then only ever grows at the end, which is what
+//! the prompt cache needs. Each entry also keeps the backend's `x-codex-turn-state`
 //! sticky-routing token for the user turn in progress.
 
 use std::collections::HashMap;
@@ -17,7 +19,7 @@ use crate::anthropic::{Block, Content, Message};
 const TTL: Duration = Duration::from_secs(30 * 60);
 
 struct Entry {
-    items: Vec<Value>,
+    steps: HashMap<String, Vec<Value>>,
     turn_state: Option<String>,
     last_access: Instant,
 }
@@ -28,20 +30,23 @@ pub struct ReasoningCache {
 }
 
 impl ReasoningCache {
-    pub fn get(&self, key: &str) -> Vec<Value> {
+    /// Reasoning items by step key.
+    pub fn get(&self, key: &str) -> HashMap<String, Vec<Value>> {
         let mut entries = self.entries.lock().unwrap();
         reap(&mut entries);
         match entries.get_mut(key) {
             Some(e) => {
                 e.last_access = Instant::now();
-                e.items.clone()
+                e.steps.clone()
             }
-            None => Vec::new(),
+            None => HashMap::new(),
         }
     }
 
-    pub fn set(&self, key: &str, items: Vec<Value>) {
-        self.update(key, |e| e.items = items);
+    pub fn add_step(&self, key: &str, step: String, items: Vec<Value>) {
+        self.update(key, |e| {
+            e.steps.insert(step, items);
+        });
     }
 
     /// The turn-state token for `key`; a new user turn drops the previous turn's token.
@@ -63,7 +68,7 @@ impl ReasoningCache {
         let mut entries = self.entries.lock().unwrap();
         reap(&mut entries);
         let now = Instant::now();
-        let e = entries.entry(key.to_string()).or_insert_with(|| Entry { items: Vec::new(), turn_state: None, last_access: now });
+        let e = entries.entry(key.to_string()).or_insert_with(|| Entry { steps: HashMap::new(), turn_state: None, last_access: now });
         f(e);
         e.last_access = now;
     }
@@ -85,6 +90,42 @@ fn user_text(m: &Message) -> String {
             })
             .collect::<Vec<_>>()
             .join("\n"),
+    }
+}
+
+fn short_hash(text: &str) -> String {
+    let digest = Sha256::digest(text.as_bytes());
+    digest.iter().take(12).map(|b| format!("{b:02x}")).collect()
+}
+
+/// Identifies one assistant step: the id of its first tool call (unique per call), or for a
+/// plain answer a hash of its text. The same key comes out of the streamed response and out of
+/// Claude Code's replay of it, so reasoning finds its step again on later requests.
+pub fn step_key(first_call_id: Option<&str>, text: &str) -> String {
+    match first_call_id {
+        Some(id) => format!("call:{id}"),
+        None => format!("text:{}", short_hash(text)),
+    }
+}
+
+/// [`step_key`] of an assistant message as Claude Code sends it back.
+pub fn message_step_key(m: &Message) -> String {
+    match &m.content {
+        Content::Text(text) => step_key(None, text),
+        Content::Blocks(blocks) => {
+            let call = blocks.iter().find_map(|b| match b {
+                Block::ToolUse { id, .. } => Some(id.as_str()),
+                _ => None,
+            });
+            let text: String = blocks
+                .iter()
+                .filter_map(|b| match b {
+                    Block::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect();
+            step_key(call, &text)
+        }
     }
 }
 
@@ -118,10 +159,11 @@ mod tests {
     fn turn_state_survives_reasoning_updates_until_next_user_turn() {
         let cache = ReasoningCache::default();
         cache.set_turn_state("k", "ts".into());
-        cache.set("k", vec![Value::Null]);
+        cache.add_step("k", "s1".into(), vec![Value::Null]);
+        cache.add_step("k", "s2".into(), vec![Value::Null]);
         assert_eq!(cache.turn_state("k", false).as_deref(), Some("ts"));
         assert_eq!(cache.turn_state("k", true), None);
-        assert_eq!(cache.get("k").len(), 1);
+        assert_eq!(cache.get("k").len(), 2);
     }
 
     #[test]
