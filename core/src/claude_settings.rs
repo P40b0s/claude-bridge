@@ -18,6 +18,32 @@ const OPUS_TARGET: &str = "anthropic:claude-opus-5-5";
 /// Keys of `managed_env` the bridge wrote, comma-separated, so it can update and remove exactly
 /// those and leave the user's own values alone.
 const MANAGED_MARKER: &str = "CLAUDE_BRIDGE_MANAGED";
+pub const NO_PROXY_KEY: &str = "CLAUDE_BRIDGE_NO_PROXY";
+const BASE_NO_PROXY: &str = "127.0.0.1,localhost,::1";
+
+/// The bridge itself plus user-supplied hosts that Claude Code and its child processes must reach
+/// directly. This is useful for private DNS names that public DoH cannot resolve.
+fn no_proxy() -> String {
+    let extra = crate::settings::read()
+        .remove(NO_PROXY_KEY)
+        .or_else(|| crate::config::env(NO_PROXY_KEY));
+    merge_no_proxy(extra.as_deref())
+}
+
+fn merge_no_proxy(extra: Option<&str>) -> String {
+    let mut entries: Vec<&str> = BASE_NO_PROXY.split(',').collect();
+    for entry in extra
+        .into_iter()
+        .flat_map(|value| value.split(','))
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+    {
+        if !entries.contains(&entry) {
+            entries.push(entry);
+        }
+    }
+    entries.join(",")
+}
 
 /// Values the bridge keeps in Claude Code's environment besides the address and login.
 pub fn managed_env() -> Vec<(&'static str, String)> {
@@ -35,7 +61,7 @@ pub fn managed_env() -> Vec<(&'static str, String)> {
     if let Some(url) = crate::egress::url() {
         env.push(("HTTPS_PROXY", url.clone()));
         env.push(("HTTP_PROXY", url));
-        env.push(("NO_PROXY", "127.0.0.1,localhost,::1".into()));
+        env.push(("NO_PROXY", no_proxy()));
     }
     // Commands Claude Code runs (git commits, `date`) and its own clock show the local time zone.
     if let Some(tz) = time_zone() {
@@ -276,8 +302,8 @@ pub fn disconnect() -> anyhow::Result<()> {
 }
 
 #[cfg(test)]
-mod locale_tests {
-    use super::full_locale;
+mod tests {
+    use super::{full_locale, merge_no_proxy};
 
     #[test]
     fn short_codes_become_full_locales() {
@@ -285,5 +311,14 @@ mod locale_tests {
         assert_eq!(full_locale("en"), "en_US.UTF-8");
         assert_eq!(full_locale("C.UTF-8"), "C.UTF-8");
         assert_eq!(full_locale("de_AT.UTF-8"), "de_AT.UTF-8");
+    }
+
+    #[test]
+    fn no_proxy_keeps_local_hosts_and_adds_private_ones() {
+        assert_eq!(merge_no_proxy(None), "127.0.0.1,localhost,::1");
+        assert_eq!(
+            merge_no_proxy(Some(" .sminex.com,10.0.0.1, localhost, , .sminex.com ")),
+            "127.0.0.1,localhost,::1,.sminex.com,10.0.0.1"
+        );
     }
 }

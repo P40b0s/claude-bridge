@@ -139,6 +139,18 @@ List<_Group> get _groups => [
       ),
     ),
     _Field(
+      'CLAUDE_BRIDGE_NO_PROXY',
+      tr('Прямые адреса Claude Code', 'Claude Code direct hosts'),
+      hint: tr(
+        'Домены, хосты или IP-адреса через запятую, которые Claude Code и запускаемые им процессы открывают напрямую, '
+            'мимо выходного прокси. Нужно для внутренних адресов, которых нет в публичном DNS: например .sminex.com. '
+            'Локальные адреса моста добавляются автоматически. Применяется к новым сессиям claude',
+        'Comma-separated domains, hosts, or IP addresses that Claude Code and its child processes reach directly, '
+            'bypassing the egress proxy. Use for private addresses absent from public DNS, for example .sminex.com. '
+            'The bridge local addresses are added automatically. Applies to new claude sessions',
+      ),
+    ),
+    _Field(
       'CLAUDE_BRIDGE_TZ',
       tr('Часовой пояс для Claude Code', 'Time zone for Claude Code'),
       hint: tr(

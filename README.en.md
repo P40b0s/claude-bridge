@@ -132,7 +132,7 @@ Each provider (Anthropic, ChatGPT / Codex, OpenAI API, OpenAI-compatible) has it
 
 **Claude Code's other traffic.** Besides model calls, Claude Code goes online itself: it refreshes its OAuth token, asks for its profile and limits, connects to MCP servers over HTTP, runs WebFetch and runs commands (git, npm, curl). To keep that off the real address too:
 - the proxy opens a second port (the proxy's port + 1 by default, `CLAUDE_BRIDGE_EGRESS_PORT`, `0` turns it off): an HTTP proxy with `CONNECT`. Every connection goes **through the Anthropic exit and its country check**. A passed check holds for 15 seconds, since commands like `npm install` open hundreds of connections. A refusal is a 451 or 502 with the reason, a log entry and a notification; nothing goes direct;
-- Claude Code gets `HTTPS_PROXY` and `HTTP_PROXY` pointing at that port, `NO_PROXY=127.0.0.1,localhost,::1` (the bridge itself is reached directly) and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` (no telemetry, error reports or update checks; update Claude Code by hand). With `claude-bridge <route>` these are the session's environment; with "any claude through the proxy", the `env` block of `~/.claude/settings.json`. The bridge marks its keys in `CLAUDE_BRIDGE_MANAGED`: it updates and removes only those, and leaves an `HTTPS_PROXY` you set alone (that traffic then takes your proxy).
+- Claude Code gets `HTTPS_PROXY` and `HTTP_PROXY` pointing at that port, `NO_PROXY=127.0.0.1,localhost,::1` (the bridge itself is reached directly) and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` (no telemetry, error reports or update checks; update Claude Code by hand). `CLAUDE_BRIDGE_NO_PROXY` can add comma-separated private domains, hosts, and IP addresses, for example `.sminex.com`: Claude Code and its child processes reach them directly, which is required for names available only through corporate DNS. With `claude-bridge <route>` these are the session's environment; with "any claude through the proxy", the `env` block of `~/.claude/settings.json`. The bridge marks its keys in `CLAUDE_BRIDGE_MANAGED`: it updates and removes only those, and leaves an `HTTPS_PROXY` you set alone (that traffic then takes your proxy).
 
 The proxy itself ignores `HTTPS_PROXY` and `HTTP_PROXY`: the exits decide where traffic goes.
 
@@ -225,6 +225,7 @@ Environment variables take precedence over `.env`. After changing settings, rest
 | `GEO_*`, `CLAUDE_BRIDGE_EXIT*` | [routes and countries](#routes-exits-and-countries) |
 | `CLAUDE_BRIDGE_DNS` | `doh` (default) or `system`: how names are resolved, [details](#routes-exits-and-countries); after a proxy restart |
 | `CLAUDE_BRIDGE_DOH_SERVERS` | comma-separated DoH servers, tried in order: JSON API (`application/dns-json`), host by IP; default `https://1.1.1.1/dns-query,https://8.8.8.8/resolve` |
+| `CLAUDE_BRIDGE_NO_PROXY` | comma-separated private domains, hosts, and IP addresses that Claude Code and its child processes reach directly; for example `.sminex.com` |
 | `CLAUDE_BRIDGE_LOG` | log filter, e.g. `claude_bridge_core=debug` |
 
 **ChatGPT login.**
