@@ -135,6 +135,9 @@ impl RequestLog {
     }
 
     pub fn publish(&self, record: RequestRecord) {
+        if let (Some(usage), Some(provider), Some(model)) = (&record.usage, &record.provider, &record.model) {
+            crate::stats::record(provider, model, usage);
+        }
         {
             let mut recent = self.recent.lock().unwrap();
             match recent.iter_mut().find(|r| r.id == record.id) {
@@ -156,6 +159,11 @@ impl RequestLog {
         let record = {
             let mut recent = self.recent.lock().unwrap();
             let Some(record) = recent.iter_mut().find(|r| r.id == id) else { return };
+            if record.usage.is_none()
+                && let (Some(provider), Some(model)) = (&record.provider, &record.model)
+            {
+                crate::stats::record(provider, model, &usage);
+            }
             record.usage = Some(usage);
             record.clone()
         };

@@ -15,6 +15,8 @@ use crate::auth::{self, now_ms};
 use crate::config;
 
 const CODEX_USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
+/// Free limit resets ChatGPT grants now and then (the ones on chatgpt.com/codex/settings/usage).
+const CODEX_RESETS_URL: &str = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
 const CLAUDE_HEADER_PREFIX: &str = "anthropic-ratelimit-unified-";
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -38,6 +40,30 @@ pub struct Usage {
     pub observed_at: i64,
     /// Why there are no numbers.
     pub error: Option<String>,
+    /// Limit resets the account can use now (Codex only).
+    #[serde(default)]
+    pub resets: Vec<ResetCredit>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ResetCredit {
+    pub id: String,
+    /// `Full reset (Weekly + 5 hr)`.
+    pub title: String,
+    /// Unix ms.
+    pub expires_at: Option<i64>,
+}
+
+/// What using a reset did.
+#[derive(Debug, PartialEq)]
+pub enum ResetOutcome {
+    /// The windows were reset; how many.
+    Reset(i64),
+    /// Nothing was used up, so there was nothing to reset; the credit stays.
+    NothingToReset,
+    NoCredit,
+    AlreadyRedeemed,
+    Other(String),
 }
 
 impl Usage {
@@ -68,15 +94,68 @@ pub async fn codex() -> Option<Usage> {
     if now_ms() > tokens.expires_at {
         return Some(Usage::unavailable("token expired; it is refreshed on the next request"));
     }
-    let mut rb = http.get(CODEX_USAGE_URL).bearer_auth(&tokens.access_token).header("originator", "codex_cli_rs");
-    if let Some(account) = &tokens.account_id {
-        rb = rb.header("chatgpt-account-id", account);
-    }
-    let body = match fetch_json(rb).await {
+    let body = match fetch_json(codex_request(http.get(CODEX_USAGE_URL), &tokens)).await {
         Ok(body) => body,
         Err(e) => return Some(Usage::unavailable(e)),
     };
-    Some(parse_codex(&body))
+    let mut usage = parse_codex(&body);
+    // The list is a second call; skipped while there is nothing in it.
+    if body["rate_limit_reset_credits"]["available_count"].as_i64().unwrap_or(0) > 0
+        && let Ok(list) = fetch_json(codex_request(http.get(CODEX_RESETS_URL), &tokens)).await
+    {
+        usage.resets = parse_resets(&list);
+    }
+    Some(usage)
+}
+
+fn codex_request(rb: reqwest::RequestBuilder, tokens: &auth::openai::CodexTokens) -> reqwest::RequestBuilder {
+    let rb = rb.bearer_auth(&tokens.access_token).header("originator", "codex_cli_rs");
+    match &tokens.account_id {
+        Some(account) => rb.header("chatgpt-account-id", account),
+        None => rb,
+    }
+}
+
+fn parse_resets(body: &Value) -> Vec<ResetCredit> {
+    let mut out: Vec<ResetCredit> = body["credits"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|c| c["status"] == "available" && c["is_supported_by_plan"] != false)
+        .filter_map(|c| {
+            Some(ResetCredit {
+                id: c["id"].as_str()?.into(),
+                title: c["title"].as_str().unwrap_or("Limit reset").into(),
+                expires_at: c["expires_at"].as_str().and_then(parse_rfc3339_ms),
+            })
+        })
+        .collect();
+    out.sort_by_key(|c| c.expires_at.unwrap_or(i64::MAX));
+    out
+}
+
+/// Uses one free reset, through the codex exit after its country check, as Codex CLI does.
+pub async fn use_codex_reset(credit_id: &str) -> anyhow::Result<ResetOutcome> {
+    let (tokens, _) = auth::openai::load().ok_or_else(|| anyhow::anyhow!("not logged in to ChatGPT"))?;
+    anyhow::ensure!(now_ms() < tokens.expires_at, "the ChatGPT token expired; it is refreshed on the next request");
+    let http = crate::exits::outside_client("codex").await?;
+    let body = serde_json::json!({
+        "redeem_request_id": uuid::Uuid::new_v4().to_string(),
+        "credit_id": credit_id,
+    });
+    let rb = codex_request(http.post(format!("{CODEX_RESETS_URL}/consume")), &tokens).json(&body);
+    let reply = fetch_json(rb).await.map_err(|e| anyhow::anyhow!(e))?;
+    Ok(parse_reset_outcome(&reply))
+}
+
+fn parse_reset_outcome(reply: &Value) -> ResetOutcome {
+    match reply["code"].as_str().unwrap_or_default() {
+        "reset" => ResetOutcome::Reset(reply["windows_reset"].as_i64().unwrap_or(0)),
+        "nothing_to_reset" => ResetOutcome::NothingToReset,
+        "no_credit" => ResetOutcome::NoCredit,
+        "already_redeemed" => ResetOutcome::AlreadyRedeemed,
+        _ => ResetOutcome::Other(reply.to_string()),
+    }
 }
 
 fn parse_codex(body: &Value) -> Usage {
@@ -233,6 +312,23 @@ mod tests {
         assert_eq!(u.windows[0].resets_at, Some(1_793_005_200_000));
         assert_eq!((u.windows[1].model.as_deref(), u.windows[1].window_minutes), (Some("opus"), Some(7 * 24 * 60)));
         assert!(from_anthropic_headers(&HeaderMap::new()).is_none());
+    }
+
+    #[test]
+    fn reset_credits() {
+        let list = serde_json::json!({ "credits": [
+            { "id": "b", "status": "available", "is_supported_by_plan": true, "title": "Full reset (Weekly + 5 hr)",
+              "expires_at": "2026-12-12T22:16:59.538480Z" },
+            { "id": "a", "status": "available", "is_supported_by_plan": true, "title": "Full reset (Weekly + 5 hr)",
+              "expires_at": "2026-11-30T20:43:12.809782Z" },
+            { "id": "used", "status": "redeemed", "title": "x" },
+            { "id": "other-plan", "status": "available", "is_supported_by_plan": false, "title": "x" }
+        ]});
+        let resets = parse_resets(&list);
+        assert_eq!(resets.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["a", "b"], "soonest to expire first");
+        assert!(resets[0].expires_at.is_some());
+        assert_eq!(parse_reset_outcome(&serde_json::json!({ "code": "reset", "windows_reset": 2 })), ResetOutcome::Reset(2));
+        assert_eq!(parse_reset_outcome(&serde_json::json!({ "code": "nothing_to_reset" })), ResetOutcome::NothingToReset);
     }
 
     #[test]

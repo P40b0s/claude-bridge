@@ -151,13 +151,15 @@ List<_Group> get _groups => [
       ),
     ),
     _Field(
-      'CLAUDE_BRIDGE_LANG',
+      'CLAUDE_BRIDGE_LOCALE',
       tr('Язык системы для Claude Code', 'System language for Claude Code'),
+      kind: _Kind.choice,
+      options: ['', 'en_US.UTF-8', 'C.UTF-8', 'de_DE.UTF-8', 'fr_FR.UTF-8', 'ru_RU.UTF-8'],
       hint: tr(
         'Передаётся как LANG и LC_ALL в Claude Code и запускаемые им команды: их вывод (даты, ошибки, git) '
-            'уходит модели на этом языке. Например en_US.UTF-8 или C.UTF-8. Пусто - системный. Применяется к новым сессиям claude',
+            'уходит модели на этом языке. Локаль должна быть установлена в системе. Применяется к новым сессиям claude',
         'Passed as LANG and LC_ALL to Claude Code and the commands it runs: their output (dates, errors, git) reaches '
-            'the model in this language. For example en_US.UTF-8 or C.UTF-8. Empty - the system one. Applies to new claude sessions',
+            'the model in this language. The locale must be installed. Applies to new claude sessions',
       ),
     ),
     _Field(

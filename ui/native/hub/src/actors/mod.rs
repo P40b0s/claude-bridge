@@ -6,6 +6,7 @@ mod models;
 mod notifications;
 mod proxy;
 mod settings;
+mod stats;
 
 use messages::prelude::{Actor, Address, Context, Notifiable};
 use rinf::DartSignal;
@@ -47,4 +48,8 @@ pub async fn create_actors() {
     let geo_context = Context::new();
     let geo_actor = geo::GeoActor::new(geo_context.address());
     spawn(geo_context.run(geo_actor));
+
+    let stats_context = Context::new();
+    let stats_actor = stats::StatsActor::new(stats_context.address());
+    spawn(stats_context.run(stats_actor));
 }

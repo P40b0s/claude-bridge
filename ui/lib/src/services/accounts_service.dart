@@ -19,6 +19,9 @@ class AccountsService
   ///Лимиты обновляются раз в минуту; это - сразу
   void refreshUsage() => RefreshUsage().sendSignalToRust();
 
+  ///Тратит один бесплатный сброс лимитов Codex
+  void useReset(String id) => UseLimitReset(id: id).sendSignalToRust();
+
   ///Открывает браузер для входа
   void login(AuthProvider authProvider)
   {

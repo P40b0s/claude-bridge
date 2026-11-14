@@ -49,16 +49,59 @@ pub fn managed_env() -> Vec<(&'static str, String)> {
     env
 }
 
-pub const LANG_KEY: &str = "CLAUDE_BRIDGE_LANG";
+pub const LOCALE_KEY: &str = "CLAUDE_BRIDGE_LOCALE";
 
-/// `CLAUDE_BRIDGE_LANG`: the locale Claude Code and the commands it runs get as `LANG` and
-/// `LC_ALL` (`en_US.UTF-8`, or `C.UTF-8`, which every system has). Unset: theirs stays as is.
+/// `CLAUDE_BRIDGE_LOCALE`: the locale Claude Code and the commands it runs get as `LANG` and
+/// `LC_ALL` (`en_US.UTF-8`, or `C.UTF-8`, which every system has; `en` means `en_US.UTF-8`).
+/// Unset, or a locale the system lacks: theirs stays as is, since a missing one makes every shell
+/// complain.
 pub fn language() -> Option<String> {
-    crate::settings::read()
-        .remove(LANG_KEY)
-        .or_else(|| crate::config::env(LANG_KEY))
+    let value = crate::settings::read()
+        .remove(LOCALE_KEY)
+        .or_else(|| crate::config::env(LOCALE_KEY))
         .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
+        .filter(|v| !v.is_empty())?;
+    let locale = full_locale(&value);
+    if !locale_exists(&locale) {
+        tracing::warn!("{LOCALE_KEY}={value}: the system has no locale {locale}; left as is");
+        return None;
+    }
+    Some(locale)
+}
+
+/// `en` → `en_US.UTF-8`, `de` → `de_DE.UTF-8`; full names stay.
+fn full_locale(value: &str) -> String {
+    if value.contains(['_', '.']) || value.eq_ignore_ascii_case("C") || value.eq_ignore_ascii_case("POSIX") {
+        return value.to_string();
+    }
+    let lang = value.to_ascii_lowercase();
+    let upper = lang.to_ascii_uppercase();
+    let country = match lang.as_str() {
+        "en" => "US",
+        "uk" => "UA",
+        "sv" => "SE",
+        "da" => "DK",
+        "et" => "EE",
+        "ja" => "JP",
+        "ko" => "KR",
+        "zh" => "CN",
+        "cs" => "CZ",
+        "el" => "GR",
+        _ => &upper,
+    };
+    format!("{lang}_{country}.UTF-8")
+}
+
+/// Linux: whether `locale -a` lists it. Elsewhere `LANG` only tells programs the language, so
+/// any value goes.
+fn locale_exists(locale: &str) -> bool {
+    if !cfg!(target_os = "linux") {
+        return true;
+    }
+    let norm = |s: &str| s.to_ascii_lowercase().replace(['-', '_', '.'], "");
+    let Ok(out) = std::process::Command::new("locale").arg("-a").output() else { return true };
+    let want = norm(locale);
+    String::from_utf8_lossy(&out.stdout).lines().any(|l| norm(l.trim()) == want)
 }
 
 pub const TZ_KEY: &str = "CLAUDE_BRIDGE_TZ";
@@ -230,4 +273,17 @@ pub fn disconnect() -> anyhow::Result<()> {
         settings.shift_remove("env");
     }
     write(&settings)
+}
+
+#[cfg(test)]
+mod locale_tests {
+    use super::full_locale;
+
+    #[test]
+    fn short_codes_become_full_locales() {
+        assert_eq!(full_locale("ru"), "ru_RU.UTF-8");
+        assert_eq!(full_locale("en"), "en_US.UTF-8");
+        assert_eq!(full_locale("C.UTF-8"), "C.UTF-8");
+        assert_eq!(full_locale("de_AT.UTF-8"), "de_AT.UTF-8");
+    }
 }

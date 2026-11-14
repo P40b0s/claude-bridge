@@ -22,3 +22,4 @@ pub mod server;
 pub mod settings;
 pub mod usage;
 pub mod zone;
+pub mod stats;

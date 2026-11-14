@@ -117,7 +117,101 @@ class AccountsPage extends StatelessWidget {
         ),
       );
     }
-    return UsageBars(usage: usage);
+    if (usage.resets.isEmpty) {
+      return UsageBars(usage: usage);
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [UsageBars(usage: usage), _ResetsList(usage.resets)],
+    );
+  }
+}
+
+///Бесплатные сбросы лимитов Codex: каждый можно потратить кнопкой
+class _ResetsList extends StatefulWidget {
+  const _ResetsList(this.resets);
+  final List<UsageReset> resets;
+
+  @override
+  State<_ResetsList> createState() => _ResetsListState();
+}
+
+class _ResetsListState extends State<_ResetsList> {
+  ///Сброс, ответа на который ещё ждём
+  String? _using;
+
+  @override
+  void didUpdateWidget(_ResetsList old) {
+    super.didUpdateWidget(old);
+    //Список обновился после сброса
+    if (_using != null && !widget.resets.any((r) => r.id == _using)) {
+      _using = null;
+    }
+  }
+
+  Future<void> _use(UsageReset reset) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(tr('Использовать сброс?', 'Use a reset?')),
+        content: Text(
+          tr(
+            '${reset.title}: 5-часовой и недельный лимиты Codex обнулятся. Сброс одноразовый. '
+                'Если лимиты сейчас не израсходованы, OpenAI его не спишет.',
+            '${reset.title}: the Codex 5-hour and weekly limits start over. A reset is single-use. '
+                'If the limits are not used up right now, OpenAI does not spend it.',
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: Text(tr('Отмена', 'Cancel'))),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: Text(tr('Сбросить', 'Reset'))),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) {
+      return;
+    }
+    setState(() => _using = reset.id);
+    context.appServices.accountsService.useReset(reset.id);
+    //Если ответ не изменил список (нечего сбрасывать), кнопка снова доступна
+    Future.delayed(const Duration(seconds: 20), () {
+      if (mounted && _using == reset.id) {
+        setState(() => _using = null);
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            tr('Бесплатные сбросы лимитов: ${widget.resets.length}', 'Free limit resets: ${widget.resets.length}'),
+            style: theme.textTheme.titleSmall,
+          ),
+          for (final r in widget.resets)
+            ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.restart_alt),
+              title: Text(r.title),
+              subtitle: r.expiresAt == null
+                  ? null
+                  : Text(tr('действует до ${formatDateTime(r.expiresAt!)}', 'expires ${formatDateTime(r.expiresAt!)}')),
+              trailing: _using == r.id
+                  ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                  : OutlinedButton(
+                      onPressed: _using != null ? null : () => _use(r),
+                      child: Text(tr('Использовать', 'Use')),
+                    ),
+            ),
+        ],
+      ),
+    );
   }
 }
 
@@ -562,6 +656,23 @@ class _ClaudeCodeCard extends StatelessWidget {
             tr(
               'Лимиты появятся после первого запроса к Claude через прокси.',
               'Limits appear after the first Claude request through the proxy.',
+            ),
+          ),
+        if (signedIn)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Tooltip(
+              message: tr(
+                'Бесплатный сброс лимитов, если Anthropic его выдал, есть только на сайте: Settings → Usage → Reset for free. '
+                    'Страница откроется в обычном браузере, мимо прокси: включите VPN той же страны, что и выход Anthropic.',
+                'A free limit reset, when Anthropic grants one, is only on the website: Settings → Usage → Reset for free. '
+                    'The page opens in your usual browser, not through the proxy: turn on a VPN in the same country as the Anthropic exit.',
+              ),
+              child: TextButton.icon(
+                onPressed: () => OpenClaudeUsage().sendSignalToRust(),
+                icon: const Icon(Icons.open_in_new, size: 18),
+                label: Text(tr('Лимиты и сбросы на claude.ai', 'Limits and resets on claude.ai')),
+              ),
             ),
           ),
       ],

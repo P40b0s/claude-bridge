@@ -7,6 +7,7 @@ import 'package:claude_bridge_ui/src/services/models_service.dart';
 import 'package:claude_bridge_ui/src/services/proxy_service.dart';
 import 'package:claude_bridge_ui/src/services/requests_service.dart';
 import 'package:claude_bridge_ui/src/services/settings_service.dart';
+import 'package:claude_bridge_ui/src/services/stats_service.dart';
 import 'package:claude_bridge_ui/src/services/tray_service.dart';
 import 'package:flutter/material.dart';
 
@@ -19,6 +20,7 @@ class AppServices {
   late SettingsService settingsService;
   late ModelsService modelsService;
   late GeoService geoService;
+  late StatsService statsService;
   late ContextWatch contextWatch;
   late LimitWatch limitWatch;
   late TrayService trayService;
@@ -36,6 +38,7 @@ class AppServices {
     trayService = TrayService(proxyService, limitWatch, contextWatch);
     modelsService = ModelsService();
     geoService = GeoService();
+    statsService = StatsService();
   }
 
   ///Сервисы подписываются на сигналы Rust, поэтому создаются до initializeRust
@@ -54,6 +57,7 @@ class AppServices {
     await settingsService.dispose();
     await modelsService.dispose();
     await geoService.dispose();
+    await statsService.dispose();
   }
 }
 

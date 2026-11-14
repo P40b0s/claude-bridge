@@ -10,6 +10,7 @@ import 'package:claude_bridge_ui/src/pages/models_page.dart';
 import 'package:claude_bridge_ui/src/pages/providers_page.dart';
 import 'package:claude_bridge_ui/src/pages/requests_page.dart';
 import 'package:claude_bridge_ui/src/pages/settings_page.dart';
+import 'package:claude_bridge_ui/src/pages/stats_page.dart';
 import 'package:claude_bridge_ui/src/providers/error_provider.dart';
 import 'package:claude_bridge_ui/src/services.dart';
 import 'package:claude_bridge_ui/src/themes.dart';
@@ -101,6 +102,12 @@ List<_Destination> get _destinations => [
     Icons.list_alt_outlined,
     Icons.list_alt,
     const RequestsPage(),
+  ),
+  _Destination(
+    tr('Статистика', 'Stats'),
+    Icons.insights_outlined,
+    Icons.insights,
+    const StatsPage(),
   ),
   _Destination(
     tr('Маршруты', 'Routes'),

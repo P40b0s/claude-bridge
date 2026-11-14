@@ -1065,6 +1065,7 @@ dependencies = [
  "async-trait",
  "claude-bridge-core",
  "futures-util",
+ "jiff",
  "messages",
  "notify-rust",
  "reqwest",

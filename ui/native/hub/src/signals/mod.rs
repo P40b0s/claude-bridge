@@ -55,6 +55,17 @@ pub struct ConnectClaudeCode {
 #[derive(Deserialize, DartSignal)]
 pub struct RefreshUsage {}
 
+/// Open claude.ai's usage page (Settings → Usage) in the browser: Claude's free limit resets
+/// are only offered there.
+#[derive(Deserialize, DartSignal)]
+pub struct OpenClaudeUsage {}
+
+/// Use one free Codex limit reset (`UsageReset.id`).
+#[derive(Deserialize, DartSignal)]
+pub struct UseLimitReset {
+    pub id: String,
+}
+
 /// Values for `~/.claude-bridge/.env`; an empty value removes the key.
 #[derive(Deserialize, DartSignal)]
 pub struct SaveSettings {
@@ -204,6 +215,16 @@ pub struct Usage {
     /// Unix ms when the numbers were read.
     pub observed_at: i64,
     pub error: Option<String>,
+    /// Free limit resets the account can use now, soonest to expire first.
+    pub resets: Vec<UsageReset>,
+}
+
+#[derive(Serialize, Clone, SignalPiece)]
+pub struct UsageReset {
+    pub id: String,
+    pub title: String,
+    /// Unix ms.
+    pub expires_at: Option<i64>,
 }
 
 /// Subscription limits. Claude's come from Anthropic's replies relayed by the proxy.
@@ -411,4 +432,44 @@ impl ErrorSignal {
         tracing::error!("{err:#}");
         Self::send(ErrorSeverity::Error, format!("{err:#}"));
     }
+}
+
+/// Tokens spent from `from` to `to` (inclusive, `YYYY-MM-DD`, local days).
+#[derive(Deserialize, DartSignal)]
+pub struct StatsRequest {
+    pub from: String,
+    pub to: String,
+}
+
+#[derive(Serialize, Clone, Default, SignalPiece)]
+pub struct StatsTokens {
+    pub requests: i64,
+    pub input: i64,
+    pub cache_read: i64,
+    pub cache_write: i64,
+    pub output: i64,
+}
+
+#[derive(Serialize, Clone, SignalPiece)]
+pub struct StatsDay {
+    pub date: String,
+    pub tokens: StatsTokens,
+}
+
+#[derive(Serialize, Clone, SignalPiece)]
+pub struct StatsModel {
+    /// `provider:model`.
+    pub model: String,
+    pub tokens: StatsTokens,
+}
+
+#[derive(Serialize, RustSignal)]
+pub struct StatsReport {
+    pub from: String,
+    pub to: String,
+    pub total: StatsTokens,
+    pub days: Vec<StatsDay>,
+    /// Most tokens first.
+    pub models: Vec<StatsModel>,
+    pub dir: String,
 }

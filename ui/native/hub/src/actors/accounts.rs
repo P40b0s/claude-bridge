@@ -11,7 +11,7 @@ use crate::i18n::tr;
 use crate::signals::{
     AccountsState, AuthProvider, CancelLogin, ChatGptAccount, ClaudeCodeAccount, ErrorSeverity,
     ErrorSignal, LoginPhase, LoginRequest, LoginState, LogoutRequest, RefreshUsage,
-    Usage, UsageState, UsageWindow,
+    Usage, UsageReset, UsageState, UsageWindow, UseLimitReset, OpenClaudeUsage,
 };
 
 /// Token expiry shown in the UI moves; resend now and then.
@@ -54,6 +54,8 @@ impl AccountsActor {
         owned_tasks.spawn(super::forward::<CancelLogin, _>(self_addr.clone()));
         owned_tasks.spawn(super::forward::<LogoutRequest, _>(self_addr.clone()));
         owned_tasks.spawn(super::forward::<RefreshUsage, _>(self_addr.clone()));
+        owned_tasks.spawn(super::forward::<UseLimitReset, _>(self_addr.clone()));
+        owned_tasks.spawn(super::forward::<OpenClaudeUsage, _>(self_addr.clone()));
         owned_tasks.spawn(Self::refresh_timer(self_addr.clone()));
         Self::send_state();
         Self {
@@ -168,6 +170,64 @@ impl Notifiable<RefreshUsage> for AccountsActor {
     }
 }
 
+const CLAUDE_USAGE_PAGE: &str = "https://claude.ai/settings/usage";
+
+#[async_trait]
+impl Notifiable<OpenClaudeUsage> for AccountsActor {
+    async fn notify(&mut self, _: OpenClaudeUsage, _: &Context<Self>) {
+        auth::open_browser(CLAUDE_USAGE_PAGE);
+    }
+}
+
+/// Internal: a reset was used; read the limits again.
+pub struct ResetUsed;
+
+#[async_trait]
+impl Notifiable<ResetUsed> for AccountsActor {
+    async fn notify(&mut self, _: ResetUsed, _: &Context<Self>) {
+        self.refresh_usage();
+    }
+}
+
+#[async_trait]
+impl Notifiable<UseLimitReset> for AccountsActor {
+    async fn notify(&mut self, msg: UseLimitReset, _: &Context<Self>) {
+        let mut addr = self.self_addr.clone();
+        tokio::spawn(async move {
+            match usage::use_codex_reset(&msg.id).await {
+                Ok(usage::ResetOutcome::Reset(_)) => ErrorSignal::send(
+                    ErrorSeverity::Success,
+                    tr("Лимиты Codex сброшены", "Codex limits reset"),
+                ),
+                Ok(usage::ResetOutcome::NothingToReset) => ErrorSignal::send(
+                    ErrorSeverity::Warning,
+                    tr(
+                        "Сбрасывать нечего: лимиты не израсходованы. Сброс не потрачен",
+                        "Nothing to reset: the limits are not used up. The reset was not spent",
+                    ),
+                ),
+                Ok(usage::ResetOutcome::NoCredit) => ErrorSignal::send(
+                    ErrorSeverity::Warning,
+                    tr("Этого сброса больше нет", "This reset is no longer available"),
+                ),
+                Ok(usage::ResetOutcome::AlreadyRedeemed) => ErrorSignal::send(
+                    ErrorSeverity::Warning,
+                    tr("Этот сброс уже использован", "This reset was already used"),
+                ),
+                Ok(usage::ResetOutcome::Other(reply)) => ErrorSignal::send(
+                    ErrorSeverity::Warning,
+                    format!("{}: {reply}", tr("Непонятный ответ на сброс", "Unexpected reset reply")),
+                ),
+                Err(e) => ErrorSignal::send(
+                    ErrorSeverity::Error,
+                    format!("{}: {e:#}", tr("Сброс не удался", "Reset failed")),
+                ),
+            }
+            let _ = addr.notify(ResetUsed).await;
+        });
+    }
+}
+
 #[async_trait]
 impl Notifiable<LoginRequest> for AccountsActor {
     async fn notify(&mut self, msg: LoginRequest, _: &Context<Self>) {
@@ -245,5 +305,10 @@ fn usage_signal(u: usage::Usage) -> Usage {
         limited: u.limited,
         observed_at: u.observed_at,
         error: u.error,
+        resets: u
+            .resets
+            .into_iter()
+            .map(|r| UsageReset { id: r.id, title: r.title, expires_at: r.expires_at })
+            .collect(),
     }
 }
