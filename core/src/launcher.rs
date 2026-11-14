@@ -109,6 +109,13 @@ pub async fn launch(launch: Launch) -> anyhow::Result<()> {
     // proxy treats as an internal call. Sonnet and haiku stay bare: Claude Code uses them internally.
     set_default_env(&mut cmd, "ANTHROPIC_DEFAULT_OPUS_MODEL", "anthropic:claude-opus-5-5");
 
+    // No telemetry, and Claude Code's other traffic through the egress proxy (see `claude_settings`).
+    for (key, value) in crate::claude_settings::managed_env() {
+        if key != "CLAUDE_CODE_AUTO_COMPACT_WINDOW" {
+            set_default_env(&mut cmd, key, &value);
+        }
+    }
+
     // Tell Claude Code the provider's real window so it compacts before the upstream rejects.
     if let Some(ctx) = &launch.context {
         set_default_env(&mut cmd, "CLAUDE_CODE_MAX_CONTEXT_TOKENS", &ctx.tokens.to_string());

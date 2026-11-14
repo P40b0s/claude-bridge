@@ -243,8 +243,74 @@ pub async fn outside_client(family: &str) -> anyhow::Result<reqwest::Client> {
 }
 
 /// Upstreams drop idle keep-alive sockets; do not hand out stale ones.
+/// Names are resolved over HTTPS (see `dns`) unless that is turned off.
 pub fn client_builder() -> reqwest::ClientBuilder {
-    reqwest::Client::builder().connect_timeout(Duration::from_secs(15)).pool_idle_timeout(Duration::from_secs(30))
+    // `HTTPS_PROXY` and the like are ignored: exits say where traffic goes, and a proxy started
+    // from a Claude Code shell would otherwise send its own traffic through its egress port.
+    let mut builder = reqwest::Client::builder()
+        .no_proxy()
+        .connect_timeout(Duration::from_secs(15))
+        .pool_idle_timeout(Duration::from_secs(30));
+    // IPv4 sockets cannot reach IPv6 addresses, whichever resolver gave them.
+    if !crate::dns::ipv6_enabled() {
+        builder = builder.local_address(std::net::IpAddr::from([0, 0, 0, 0]));
+    }
+    if crate::dns::doh_enabled() { builder.dns_resolver(crate::dns::DohResolver(crate::dns::Doh::global())) } else { builder }
+}
+
+/// `ssh` without a console window: on Windows the proxy runs detached, and a console program it
+/// starts would otherwise pop up a window of its own (again on every reconnect).
+fn ssh_command() -> Command {
+    #[allow(unused_mut)]
+    let mut cmd = Command::new("ssh");
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
+fn ssh_spawn_error(e: std::io::Error) -> anyhow::Error {
+    if e.kind() == std::io::ErrorKind::NotFound {
+        let hint = if cfg!(windows) {
+            "install the OpenSSH Client (Settings > System > Optional features)"
+        } else {
+            "install the OpenSSH client"
+        };
+        anyhow::anyhow!("ssh is not installed or not in PATH: {hint}")
+    } else {
+        anyhow::anyhow!("cannot run ssh: {e}")
+    }
+}
+
+/// `-o HostName=<ip> -o HostKeyAlias=<name>` so ssh does not ask the system resolver for the
+/// server's name; the alias keeps `known_hosts` matching the name. The name is the one ssh would
+/// connect to after `~/.ssh/config` (`ssh -G`).
+async fn ssh_resolved_host(target: &str, port: Option<u16>) -> anyhow::Result<Vec<String>> {
+    if !crate::dns::doh_enabled() {
+        return Ok(Vec::new());
+    }
+    let mut cmd = ssh_command();
+    cmd.arg("-G");
+    if let Some(port) = port {
+        cmd.args(["-p", &port.to_string()]);
+    }
+    let out = cmd.arg(target).stdin(Stdio::null()).output().await.map_err(ssh_spawn_error)?;
+    let config = String::from_utf8_lossy(&out.stdout);
+    let option = |key: &str| config.lines().find_map(|l| l.strip_prefix(key)?.strip_prefix(' ')).map(str::trim);
+    let host = option("hostname").unwrap_or(target.rsplit('@').next().unwrap_or(target));
+    // A ProxyJump/ProxyCommand server resolves the name itself.
+    if option("proxyjump").is_some_and(|v| v != "none") || option("proxycommand").is_some_and(|v| v != "none") {
+        return Ok(Vec::new());
+    }
+    if host.parse::<std::net::IpAddr>().is_ok() {
+        return Ok(Vec::new());
+    }
+    let ips = crate::dns::Doh::global().lookup(host).await?;
+    let ip = ips.first().ok_or_else(|| anyhow::anyhow!("{host} has no address"))?;
+    let alias = option("hostkeyalias").filter(|a| *a != "none").unwrap_or(host);
+    Ok(vec!["-o".into(), format!("HostName={ip}"), "-o".into(), format!("HostKeyAlias={alias}")])
 }
 
 fn proxied_client(url: &str) -> anyhow::Result<reqwest::Client> {
@@ -263,8 +329,10 @@ async fn start_tunnel(exit: &Exit) -> anyhow::Result<Tunnel> {
         Some(user) => format!("{user}@{host}"),
         None => host.clone(),
     };
-    let mut cmd = Command::new("ssh");
+    let resolved = ssh_resolved_host(&target, *port).await?;
+    let mut cmd = ssh_command();
     cmd.args(["-N", "-D", &format!("127.0.0.1:{local}")])
+        .args(&resolved)
         // No prompts: a password or an unknown-key question would hang the proxy.
         .args(["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new"])
         .args(["-o", "ExitOnForwardFailure=yes", "-o", "ConnectTimeout=10"])
@@ -273,7 +341,7 @@ async fn start_tunnel(exit: &Exit) -> anyhow::Result<Tunnel> {
         cmd.args(["-p", &port.to_string()]);
     }
     cmd.arg(&target).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).kill_on_drop(true);
-    let mut child = cmd.spawn().map_err(|e| anyhow::anyhow!("cannot run ssh: {e}"))?;
+    let mut child = cmd.spawn().map_err(ssh_spawn_error)?;
 
     let stderr = Arc::new(std::sync::Mutex::new(Vec::new()));
     if let Some(pipe) = child.stderr.take() {

@@ -185,6 +185,14 @@ class _ProviderCard extends StatelessWidget
               ),
             ],
           ),
+          if (p.family == 'anthropic')
+            Text(
+              tr('Через этот же выход и с этими же странами идёт весь прочий трафик Claude Code: вход и токены, MCP, WebFetch, '
+                  'запускаемые им команды.',
+                  "Claude Code's other traffic takes this exit and these countries too: login and tokens, MCP, WebFetch, "
+                  'the commands it runs.'),
+              style: TextStyle(color: theme.hintColor),
+            ),
           const SizedBox(height: 8),
           _Location(exit: p.exit, prefix: '${tr('видит', 'sees')} ${Uri.tryParse(p.origin)?.host ?? p.origin}: '),
           if (state.enabled && ok != true)

@@ -48,7 +48,7 @@ pub struct AppState {
     pub reasoning_cache: ReasoningCache,
     pub log: RequestLog,
     pub cooldowns: Cooldowns,
-    pub exits: Exits,
+    pub exits: Arc<Exits>,
     /// Last model the user picked in any session; the fallback for sessions not seen yet.
     active: RwLock<Option<Target>>,
     /// Last model picked per Claude Code session (`x-claude-code-session-id`). Bare model
@@ -69,7 +69,7 @@ pub async fn serve(port: u16, default: Option<Target>) -> anyhow::Result<()> {
     let http = http_client()?;
     let state = Arc::new(AppState {
         http: http.clone(),
-        exits: Exits::new(http),
+        exits: Arc::new(Exits::new(http)),
         openai_auth: OpenAiAuth::default(),
         reasoning_cache: ReasoningCache::default(),
         log: RequestLog::default(),
@@ -109,12 +109,15 @@ pub async fn serve(port: u16, default: Option<Target>) -> anyhow::Result<()> {
         );
     }
 
+    // Claude Code's own traffic besides model calls; ends with the proxy.
+    let egress = tokio::spawn(crate::egress::serve(state.clone()));
     tokio::select! {
         result = axum::serve(listener, app) => result?,
         _ = state.shutdown.notified() => info!("shutdown requested"),
         _ = tokio::signal::ctrl_c() => info!("interrupted"),
         _ = terminate() => info!("terminated"),
     }
+    egress.abort();
     Ok(())
 }
 

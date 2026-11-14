@@ -335,7 +335,7 @@ impl Refusals {
         } else {
             tr("Запрос отклонён: выход недоступен", "Request refused: exit unavailable")
         };
-        let provider = record.provider.as_deref().unwrap_or("?");
+        let provider = record.provider.as_deref().unwrap_or(&record.requested);
         let body = format!("{provider}: {error}");
         ErrorSignal::send(ErrorSeverity::Warning, format!("{title}. {body}"));
         super::notifications::show(title.to_string(), body);

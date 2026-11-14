@@ -7,6 +7,8 @@ pub mod claude_settings;
 pub mod config;
 pub mod control;
 pub mod cooldown;
+pub mod dns;
+pub mod egress;
 pub mod error;
 pub mod exits;
 pub mod families;

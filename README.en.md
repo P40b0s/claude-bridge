@@ -126,9 +126,19 @@ The "Routes" tab is a builder: for each provider you choose **what** its traffic
 - `ssh://user@host[:port]`: your own server. The proxy opens an `ssh -D` tunnel (a local SOCKS5 port) itself and keeps it while it runs. The server only needs `sshd` with key login. Login must work with no password and no prompts: `ssh-copy-id user@host`, then try `ssh user@host`. The key is found as usual: `~/.ssh`, ssh-agent, `~/.ssh/config`. The server needs `AllowTcpForwarding yes`, which is the default on Fedora;
 - `socks5://host:port`, `http://[user:pass@]host:port`: an existing proxy, such as a VPN client's local SOCKS port.
 
-Each provider (Anthropic, ChatGPT / Codex, OpenAI API, OpenAI-compatible) has its own exit. If the exit is down (the tunnel did not come up, the proxy does not answer), the request is **not sent direct**: it is refused with a 502. Host names behind SOCKS are resolved on the far side (`socks5h`), so local DNS does not leak.
+Each provider (Anthropic, ChatGPT / Codex, OpenAI API, OpenAI-compatible) has its own exit. If the exit is down (the tunnel did not come up, the proxy does not answer), the request is **not sent direct**: it is refused with a 502. **DNS.** Behind SOCKS and SSH, names are resolved on the far side (`socks5h`); an HTTP proxy gets the name in `CONNECT`. For direct connections and for the SSH server's own address, the proxy, UI and CLI use DNS over HTTPS: the servers in `CLAUDE_BRIDGE_DOH_SERVERS`, by default `https://1.1.1.1/dns-query` with `https://8.8.8.8/resolve` as a fallback. A server's host must be an IP, so reaching it needs no DNS. The system resolver, the router and the ISP never see the names. The SSH server's name is taken after `~/.ssh/config` (`ssh -G`); its IP goes to `ssh` as `HostName`, and `HostKeyAlias` keeps `known_hosts` checked by name. If DoH does not answer, nothing is sent; the proxy never falls back to the system DNS. `CLAUDE_BRIDGE_DNS=system` brings the usual resolver back: you need it if a VPN client routes by domain through fake-ip DNS (with DoH it only sees IPs; the country check still stops a request that goes the wrong way).
 
 **Countries.** With the restriction on, before every request, with no caching, the proxy asks the provider's host for Cloudflare's `/cdn-cgi/trace` page **through that provider's exit**. That host is `api.anthropic.com`, `chatgpt.com` or `api.openai.com`. The answer shows the IP and country as the provider itself sees them. It is the same domain as the real request, so domain-based routing rules in a VPN client or on the router apply to the check the same way. If the host has no such page (often the case for OpenAI-compatible APIs), `www.cloudflare.com` is asked through the same exit: exact behind an SSH server or proxy, approximate when direct. A provider can have its own country list; otherwise the shared one applies. If the country is not allowed or cannot be determined, nothing is sent to the provider and the proxy returns a 451 naming the host, IP and country. The app shows a notification about it.
+
+**Claude Code's other traffic.** Besides model calls, Claude Code goes online itself: it refreshes its OAuth token, asks for its profile and limits, connects to MCP servers over HTTP, runs WebFetch and runs commands (git, npm, curl). To keep that off the real address too:
+- the proxy opens a second port (the proxy's port + 1 by default, `CLAUDE_BRIDGE_EGRESS_PORT`, `0` turns it off): an HTTP proxy with `CONNECT`. Every connection goes **through the Anthropic exit and its country check**. A passed check holds for 15 seconds, since commands like `npm install` open hundreds of connections. A refusal is a 451 or 502 with the reason, a log entry and a notification; nothing goes direct;
+- Claude Code gets `HTTPS_PROXY` and `HTTP_PROXY` pointing at that port, `NO_PROXY=127.0.0.1,localhost,::1` (the bridge itself is reached directly) and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` (no telemetry, error reports or update checks; update Claude Code by hand). With `claude-bridge <route>` these are the session's environment; with "any claude through the proxy", the `env` block of `~/.claude/settings.json`. The bridge marks its keys in `CLAUDE_BRIDGE_MANAGED`: it updates and removes only those, and leaves an `HTTPS_PROXY` you set alone (that traffic then takes your proxy).
+
+The proxy itself ignores `HTTPS_PROXY` and `HTTP_PROXY`: the exits decide where traffic goes.
+
+**IPv6.** If your VPN tunnels IPv4 only, `CLAUDE_BRIDGE_IPV6=0` keeps everything on IPv4: names (DoH returns A records only) and sockets.
+
+What the proxy cannot cover: the ChatGPT login in the browser (the `auth.openai.com` page takes the browser's route; log in with the VPN on) and what the requests themselves reveal (Claude Code's system prompt includes the platform and the working directory path, and the language you write in).
 
 The home page shows the direct connection's country and, below it, which providers are blocked right now.
 
@@ -140,6 +150,8 @@ The settings apply immediately, no restart needed:
 | `GEO_ALLOWED_COUNTRIES` | shared list: comma-separated ISO codes (`DE,NL,SE`); `-` for none; unset means every country on the list |
 | `GEO_ALLOWED_<PROVIDER>` | a provider's own list: `GEO_ALLOWED_ANTHROPIC`, `_CODEX`, `_OPENAI`, `_OPENAI_COMPAT` |
 | `CLAUDE_BRIDGE_EXITS` | comma-separated exits: `ssh://root@203.0.113.7,socks5://127.0.0.1:1080` |
+| `CLAUDE_BRIDGE_EGRESS_PORT` | port for Claude Code's other traffic; the proxy's port + 1 by default, `0` turns it off |
+| `CLAUDE_BRIDGE_IPV6` | `0`: IPv4 only |
 | `CLAUDE_BRIDGE_EXIT_<PROVIDER>` | a provider's exit, e.g. `CLAUDE_BRIDGE_EXIT_CODEX=ssh://root@203.0.113.7`; unset means direct |
 
 The country list is `COUNTRIES` in [core/src/geo.rs](core/src/geo.rs).
@@ -205,6 +217,8 @@ Environment variables take precedence over `.env`. After changing settings, rest
 | `CLAUDE_BRIDGE_LANG` | UI language: `ru` or `en` |
 | `CLAUDE_BRIDGE_DISABLED_PROVIDERS` | disabled providers: comma-separated `anthropic`, `codex`, `openai`, `openai-compat` |
 | `GEO_*`, `CLAUDE_BRIDGE_EXIT*` | [routes and countries](#routes-exits-and-countries) |
+| `CLAUDE_BRIDGE_DNS` | `doh` (default) or `system`: how names are resolved, [details](#routes-exits-and-countries); after a proxy restart |
+| `CLAUDE_BRIDGE_DOH_SERVERS` | comma-separated DoH servers, tried in order: JSON API (`application/dns-json`), host by IP; default `https://1.1.1.1/dns-query,https://8.8.8.8/resolve` |
 | `CLAUDE_BRIDGE_LOG` | log filter, e.g. `claude_bridge_core=debug` |
 
 **ChatGPT login.**

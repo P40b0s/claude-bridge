@@ -15,13 +15,57 @@ const AUTH_TOKEN: &str = "ANTHROPIC_AUTH_TOKEN";
 const OPUS_MODEL: &str = "ANTHROPIC_DEFAULT_OPUS_MODEL";
 /// `/model opus` is an explicit pick of Claude, not a bare name the proxy treats as internal.
 const OPUS_TARGET: &str = "anthropic:claude-opus-5-5";
-/// Without it a connected `claude` compacts by Claude's own window, long after GPT sessions get
-/// expensive.
-const COMPACT_WINDOW: &str = "CLAUDE_CODE_AUTO_COMPACT_WINDOW";
+/// Keys of `managed_env` the bridge wrote, comma-separated, so it can update and remove exactly
+/// those and leave the user's own values alone.
+const MANAGED_MARKER: &str = "CLAUDE_BRIDGE_MANAGED";
 
-fn compact_value() -> Option<String> {
+/// Values the bridge keeps in Claude Code's environment besides the address and login.
+pub fn managed_env() -> Vec<(&'static str, String)> {
+    let mut env = Vec::new();
+    // Without it a connected `claude` compacts by Claude's own window, long after GPT sessions
+    // get expensive.
     let ctx = crate::launcher::codex_context();
-    (!ctx.disable_compact).then(|| ctx.auto_compact_at.to_string())
+    if !ctx.disable_compact {
+        env.push(("CLAUDE_CODE_AUTO_COMPACT_WINDOW", ctx.auto_compact_at.to_string()));
+    }
+    // Telemetry, error reports, update checks: straight to Anthropic and others from the real address.
+    env.push(("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1".into()));
+    // Everything else Claude Code sends (OAuth refresh, MCP over HTTP, WebFetch, the tools it
+    // runs) leaves through the egress proxy; the bridge itself is reached directly.
+    if let Some(url) = crate::egress::url() {
+        env.push(("HTTPS_PROXY", url.clone()));
+        env.push(("HTTP_PROXY", url));
+        env.push(("NO_PROXY", "127.0.0.1,localhost,::1".into()));
+    }
+    env
+}
+
+fn marked(env: &Map<String, Value>) -> Vec<String> {
+    env.get(MANAGED_MARKER).and_then(Value::as_str).unwrap_or_default().split(',').filter(|k| !k.is_empty()).map(String::from).collect()
+}
+
+/// Brings the managed values in line with the settings: sets missing ones, updates its own, drops
+/// its own that are no longer wanted (egress turned off, say). True when `env` changed.
+fn sync_managed(env: &mut Map<String, Value>) -> bool {
+    let before = env.clone();
+    let previous = marked(env);
+    let want = managed_env();
+    let mut ours = Vec::new();
+    for (key, value) in &want {
+        if !env.contains_key(*key) || previous.iter().any(|k| k == key) {
+            env.insert((*key).into(), json!(value));
+            ours.push(*key);
+        }
+    }
+    for key in previous.iter().filter(|k| !want.iter().any(|(w, _)| w == k)) {
+        env.shift_remove(key.as_str());
+    }
+    if ours.is_empty() {
+        env.shift_remove(MANAGED_MARKER);
+    } else {
+        env.insert(MANAGED_MARKER.into(), json!(ours.join(",")));
+    }
+    *env != before
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -99,29 +143,20 @@ pub fn connect(port: u16) -> anyhow::Result<()> {
     let Some(env) = env.as_object_mut() else { bail!("\"env\" in {} is not an object", settings_file().display()) };
     env.insert(BASE_URL.into(), json!(control::base_url(port)));
     env.entry(OPUS_MODEL).or_insert_with(|| json!(OPUS_TARGET));
-    if let Some(compact) = compact_value() {
-        env.entry(COMPACT_WINDOW).or_insert_with(|| json!(compact));
-    }
+    sync_managed(env);
     sync_placeholder(env);
     write(&settings)
 }
 
-/// Keeps the placeholder token in step with Claude Code's login while connected, and the
-/// compaction window in place; writes only on change.
+/// Keeps the placeholder token in step with Claude Code's login while connected, and the managed
+/// values in place; writes only on change.
 pub fn sync_auth(port: u16) -> anyhow::Result<()> {
     if connection(port) != Connection::Connected {
         return Ok(());
     }
     let mut settings = read()?;
     let Some(env) = settings.get_mut("env").and_then(Value::as_object_mut) else { return Ok(()) };
-    let mut changed = sync_placeholder(env);
-    // Settings connected before the compaction default existed get it too.
-    if let Some(compact) = compact_value()
-        && !env.contains_key(COMPACT_WINDOW)
-    {
-        env.insert(COMPACT_WINDOW.into(), json!(compact));
-        changed = true;
-    }
+    let changed = sync_placeholder(env) | sync_managed(env);
     if changed { write(&settings) } else { Ok(()) }
 }
 
@@ -139,10 +174,11 @@ pub fn disconnect() -> anyhow::Result<()> {
         env.shift_remove(OPUS_MODEL);
         changed = true;
     }
-    if let Some(compact) = compact_value()
-        && ours(env.get(COMPACT_WINDOW), &|v| v == compact)
-    {
-        env.shift_remove(COMPACT_WINDOW);
+    for key in marked(env) {
+        env.shift_remove(key.as_str());
+        changed = true;
+    }
+    if env.shift_remove(MANAGED_MARKER).is_some() {
         changed = true;
     }
     if ours(env.get(AUTH_TOKEN), &|t| t == PLACEHOLDER_TOKEN) {

@@ -41,7 +41,7 @@ pub struct Health {
 }
 
 fn client(timeout: Option<Duration>) -> reqwest::Client {
-    let mut builder = reqwest::Client::builder();
+    let mut builder = reqwest::Client::builder().no_proxy();
     if let Some(timeout) = timeout {
         builder = builder.timeout(timeout);
     }

@@ -103,6 +103,52 @@ List<_Group> get _groups => [
       hint: tr('По умолчанию 17870', 'Default 17870'),
     ),
     _Field(
+      'CLAUDE_BRIDGE_DNS',
+      tr('DNS', 'DNS'),
+      kind: _Kind.choice,
+      options: ['', 'doh', 'system'],
+      hint: tr(
+        'По умолчанию doh: имена провайдеров и SSH-серверов резолвятся через DNS over HTTPS (серверы ниже), '
+            'системный DNS их не видит. system - обычный резолвер (нужен, если VPN-клиент работает в режиме fake-ip). '
+            'Применяется после перезапуска прокси',
+        'doh by default: provider and SSH server names are resolved over DNS over HTTPS (servers below), '
+            'the system DNS never sees them. system - the usual resolver (needed if a VPN client runs in fake-ip mode). '
+            'Applies after a proxy restart',
+      ),
+    ),
+    _Field(
+      'CLAUDE_BRIDGE_IPV6',
+      tr('IPv6', 'IPv6'),
+      kind: _Kind.choice,
+      options: ['', '1', '0'],
+      hint: tr(
+        '0 - соединяться только по IPv4: на случай VPN, который туннелирует IPv4, а IPv6 пускает мимо себя. '
+            'Применяется после перезапуска прокси',
+        '0 - connect over IPv4 only: for a VPN that tunnels IPv4 and lets IPv6 go around it. Applies after a proxy restart',
+      ),
+    ),
+    _Field(
+      'CLAUDE_BRIDGE_EGRESS_PORT',
+      tr('Порт для прочего трафика Claude Code', "Port for Claude Code's other traffic"),
+      kind: _Kind.number,
+      hint: tr(
+        'Всё, что Claude Code шлёт помимо запросов к модели (OAuth, MCP, WebFetch, запускаемые им команды), идёт через '
+            'этот порт, выход и проверку страны Anthropic. По умолчанию порт прокси + 1; 0 - отключить',
+        'Everything Claude Code sends besides model calls (OAuth, MCP, WebFetch, the commands it runs) goes through this '
+            'port, the Anthropic exit and its country check. Default: the proxy port + 1; 0 turns it off',
+      ),
+    ),
+    _Field(
+      'CLAUDE_BRIDGE_DOH_SERVERS',
+      tr('Серверы DNS over HTTPS', 'DNS over HTTPS servers'),
+      hint: tr(
+        'Через запятую, по порядку; JSON API (application/dns-json), хост - только IP. '
+            'По умолчанию https://1.1.1.1/dns-query,https://8.8.8.8/resolve',
+        'Comma-separated, tried in order; JSON API (application/dns-json), host by IP only. '
+            'Default https://1.1.1.1/dns-query,https://8.8.8.8/resolve',
+      ),
+    ),
+    _Field(
       'ANTHROPIC_UPSTREAM_URL',
       tr('Адрес Anthropic API', 'Anthropic API address'),
       hint: tr(
