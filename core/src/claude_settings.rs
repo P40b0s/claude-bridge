@@ -37,7 +37,45 @@ pub fn managed_env() -> Vec<(&'static str, String)> {
         env.push(("HTTP_PROXY", url));
         env.push(("NO_PROXY", "127.0.0.1,localhost,::1".into()));
     }
+    // Commands Claude Code runs (git commits, `date`) and its own clock show the local time zone.
+    if let Some(tz) = time_zone() {
+        env.push(("TZ", tz));
+    }
+    // Their output (dates, compiler errors, git messages) goes to the model in the system language.
+    if let Some(lang) = language() {
+        env.push(("LANG", lang.clone()));
+        env.push(("LC_ALL", lang));
+    }
     env
+}
+
+pub const LANG_KEY: &str = "CLAUDE_BRIDGE_LANG";
+
+/// `CLAUDE_BRIDGE_LANG`: the locale Claude Code and the commands it runs get as `LANG` and
+/// `LC_ALL` (`en_US.UTF-8`, or `C.UTF-8`, which every system has). Unset: theirs stays as is.
+pub fn language() -> Option<String> {
+    crate::settings::read()
+        .remove(LANG_KEY)
+        .or_else(|| crate::config::env(LANG_KEY))
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+pub const TZ_KEY: &str = "CLAUDE_BRIDGE_TZ";
+
+/// `CLAUDE_BRIDGE_TZ` as written.
+pub fn time_zone_setting() -> Option<String> {
+    crate::settings::read()
+        .remove(TZ_KEY)
+        .or_else(|| crate::config::env(TZ_KEY))
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+/// The zone Claude Code and the commands it runs get as `TZ`: a name (`UTC`, `Europe/Berlin`), or
+/// with `auto` the zone of the Anthropic exit's country (see `zone`). Unset: theirs stays as is.
+pub fn time_zone() -> Option<String> {
+    time_zone_setting().map(|v| if v.eq_ignore_ascii_case("auto") { crate::zone::auto() } else { v })
 }
 
 fn marked(env: &Map<String, Value>) -> Vec<String> {

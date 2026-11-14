@@ -21,3 +21,4 @@ pub mod routing;
 pub mod server;
 pub mod settings;
 pub mod usage;
+pub mod zone;

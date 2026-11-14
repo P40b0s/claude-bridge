@@ -150,11 +150,17 @@ impl GeoActor {
         let mut addr = self.self_addr.clone();
         tokio::spawn(async move {
             let port = configuration::port();
-            let result = if control::health(port).await.is_some() {
-                control::exits_report(port).await.map(|r| (r, true))
+            let running = control::health(port).await.is_some();
+            let from_proxy = match running {
+                true => control::exits_report(port).await.ok(),
+                false => None,
+            };
+            let result = if let Some(report) = from_proxy {
+                Ok((report, true))
             } else {
+                // Not running, or a version without /_exits: check from here (SSH exits need the proxy).
                 match local {
-                    Some(local) => Ok((local.report(server::family_origin, false).await, false)),
+                    Some(local) => Ok((local.report(server::family_origin, false).await, running)),
                     None => Err(anyhow::anyhow!(tr(
                         "не удалось создать HTTP-клиент",
                         "cannot create an HTTP client"

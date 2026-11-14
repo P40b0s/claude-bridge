@@ -139,6 +139,28 @@ List<_Group> get _groups => [
       ),
     ),
     _Field(
+      'CLAUDE_BRIDGE_TZ',
+      tr('Часовой пояс для Claude Code', 'Time zone for Claude Code'),
+      hint: tr(
+        'Передаётся как TZ в Claude Code и запускаемые им команды: время в git-коммитах, вывод date. '
+            'auto - пояс страны выхода Anthropic (если страна неизвестна - UTC); или явно: UTC, Europe/Berlin. '
+            'Пусто - системный. Применяется к новым сессиям claude',
+        'Passed as TZ to Claude Code and the commands it runs: git commit times, date output. '
+            'auto - the zone of the Anthropic exit\'s country (UTC while it is unknown); or a name: UTC, Europe/Berlin. '
+            'Empty - the system one. Applies to new claude sessions',
+      ),
+    ),
+    _Field(
+      'CLAUDE_BRIDGE_LANG',
+      tr('Язык системы для Claude Code', 'System language for Claude Code'),
+      hint: tr(
+        'Передаётся как LANG и LC_ALL в Claude Code и запускаемые им команды: их вывод (даты, ошибки, git) '
+            'уходит модели на этом языке. Например en_US.UTF-8 или C.UTF-8. Пусто - системный. Применяется к новым сессиям claude',
+        'Passed as LANG and LC_ALL to Claude Code and the commands it runs: their output (dates, errors, git) reaches '
+            'the model in this language. For example en_US.UTF-8 or C.UTF-8. Empty - the system one. Applies to new claude sessions',
+      ),
+    ),
+    _Field(
       'CLAUDE_BRIDGE_DOH_SERVERS',
       tr('Серверы DNS over HTTPS', 'DNS over HTTPS servers'),
       hint: tr(

@@ -81,6 +81,13 @@ pub async fn launch(launch: Launch) -> anyhow::Result<()> {
         eprintln!("  Model pinned to {} (claude-bridge model --clear to follow /model)", model(&health.pinned));
     }
 
+    // `CLAUDE_BRIDGE_TZ=auto`: the zone of the exit's country as it is now, not as last seen.
+    if crate::claude_settings::time_zone_setting().is_some_and(|v| v.eq_ignore_ascii_case("auto")) {
+        match crate::zone::locate_outside().await {
+            Ok(location) => crate::zone::remember(&location),
+            Err(e) => eprintln!("  Warning: exit country unknown, time zone {}: {e:#}", crate::zone::auto()),
+        }
+    }
     // settings.json's env applies to this claude too, so its placeholder token must match the login.
     if let Err(e) = crate::claude_settings::sync_auth(port) {
         eprintln!("  Warning: {e:#}");

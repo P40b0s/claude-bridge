@@ -138,7 +138,11 @@ The proxy itself ignores `HTTPS_PROXY` and `HTTP_PROXY`: the exits decide where 
 
 **IPv6.** If your VPN tunnels IPv4 only, `CLAUDE_BRIDGE_IPV6=0` keeps everything on IPv4: names (DoH returns A records only) and sockets.
 
-What the proxy cannot cover: the ChatGPT login in the browser (the `auth.openai.com` page takes the browser's route; log in with the VPN on) and what the requests themselves reveal (Claude Code's system prompt includes the platform and the working directory path, and the language you write in).
+**What the proxy cannot cover; do it yourself.**
+- **Browser logins** (the ChatGPT login, `claude /login`). The login page takes the browser's route; the bridge never sees it. A VPN hides only the IP: through JavaScript the page sees the browser's time zone and language (`Accept-Language`). Before logging in, turn the VPN on and set the browser's zone and language to the exit country's, ideally in a separate profile.
+- **Claude Code updates.** With `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` auto-update is off. `claude update` from a plain terminal downloads the new version from Anthropic's servers from the real address. Run it through the proxy's port: `HTTPS_PROXY=http://127.0.0.1:17871 claude update` (or from a Claude Code session, where the variable is already set).
+- **What the requests contain.** Claude Code's system prompt includes the platform, the OS version and the working directory path (and with it the user name), and git status with the commit author. Plus the language you write in. `CLAUDE_BRIDGE_TZ` and `CLAUDE_BRIDGE_LANG` align commit times and command output.
+- **The account.** Its country, the payment card, logins from other devices without the VPN, the hours you are active.
 
 The home page shows the direct connection's country and, below it, which providers are blocked right now.
 
@@ -151,6 +155,8 @@ The settings apply immediately, no restart needed:
 | `GEO_ALLOWED_<PROVIDER>` | a provider's own list: `GEO_ALLOWED_ANTHROPIC`, `_CODEX`, `_OPENAI`, `_OPENAI_COMPAT` |
 | `CLAUDE_BRIDGE_EXITS` | comma-separated exits: `ssh://root@203.0.113.7,socks5://127.0.0.1:1080` |
 | `CLAUDE_BRIDGE_EGRESS_PORT` | port for Claude Code's other traffic; the proxy's port + 1 by default, `0` turns it off |
+| `CLAUDE_BRIDGE_TZ` | time zone (`TZ`) for Claude Code and the commands it runs: git commit times, `date`. `auto` is the zone of the Anthropic exit's country (`UTC` while unknown), or a name: `UTC`, `Europe/Berlin`; empty means the system one |
+| `CLAUDE_BRIDGE_LANG` | locale (`LANG`, `LC_ALL`) for Claude Code and the commands it runs: their output reaches the model in it. For example `en_US.UTF-8` or `C.UTF-8`; empty means the system one |
 | `CLAUDE_BRIDGE_IPV6` | `0`: IPv4 only |
 | `CLAUDE_BRIDGE_EXIT_<PROVIDER>` | a provider's exit, e.g. `CLAUDE_BRIDGE_EXIT_CODEX=ssh://root@203.0.113.7`; unset means direct |
 

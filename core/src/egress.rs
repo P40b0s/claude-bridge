@@ -39,7 +39,9 @@ async fn check_country(exit: &Exit, client: &reqwest::Client) -> Result<(), crat
     if fresh {
         return Ok(());
     }
-    geo::check(client, FAMILY, &server::family_origin(FAMILY)).await?;
+    if let Some(location) = geo::check(client, FAMILY, &server::family_origin(FAMILY)).await? {
+        crate::zone::remember(&location);
+    }
     *PASSED.lock().unwrap() = Some((spec, std::time::Instant::now()));
     Ok(())
 }

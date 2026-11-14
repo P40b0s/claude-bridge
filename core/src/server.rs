@@ -111,6 +111,7 @@ pub async fn serve(port: u16, default: Option<Target>) -> anyhow::Result<()> {
 
     // Claude Code's own traffic besides model calls; ends with the proxy.
     let egress = tokio::spawn(crate::egress::serve(state.clone()));
+    let zone = tokio::spawn(crate::zone::watch(state.clone()));
     tokio::select! {
         result = axum::serve(listener, app) => result?,
         _ = state.shutdown.notified() => info!("shutdown requested"),
@@ -118,6 +119,7 @@ pub async fn serve(port: u16, default: Option<Target>) -> anyhow::Result<()> {
         _ = terminate() => info!("terminated"),
     }
     egress.abort();
+    zone.abort();
     Ok(())
 }
 
@@ -365,6 +367,11 @@ async fn route_message(
         Ok(location) => location,
         Err(e) => return Err(Box::new((e, tracker))),
     };
+    if family == "anthropic"
+        && let Some(location) = &location
+    {
+        crate::zone::remember(location);
+    }
     state.log.running(&tracker);
 
     info!(

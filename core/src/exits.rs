@@ -227,6 +227,13 @@ impl Exits {
 /// exit the running proxy is asked for its tunnel's port; without the proxy that fails rather
 /// than going direct.
 pub async fn outside_client(family: &str) -> anyhow::Result<reqwest::Client> {
+    let client = outside_client_unchecked(family).await?;
+    geo::check(&client, family, &crate::server::family_origin(family)).await.map_err(|e| anyhow::anyhow!(e.message))?;
+    Ok(client)
+}
+
+/// `outside_client` without the country check: only for asking where the exit is.
+pub async fn outside_client_unchecked(family: &str) -> anyhow::Result<reqwest::Client> {
     let exit = configured(family)?;
     let client = match &exit {
         Exit::Direct => client_builder().build()?,
@@ -238,7 +245,6 @@ pub async fn outside_client(family: &str) -> anyhow::Result<reqwest::Client> {
             proxied_client(&format!("socks5h://127.0.0.1:{port}"))?
         }
     };
-    geo::check(&client, family, &crate::server::family_origin(family)).await.map_err(|e| anyhow::anyhow!(e.message))?;
     Ok(client)
 }
 
