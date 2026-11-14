@@ -1,7 +1,6 @@
 //! Anthropic Messages → OpenAI-compatible Chat Completions API.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
 use eventsource_stream::Eventsource;
 use futures_util::StreamExt;
@@ -14,7 +13,6 @@ use crate::anthropic::{
 };
 use crate::error::ProxyError;
 use crate::routing::Target;
-use crate::server::AppState;
 
 fn endpoint(base: &str) -> String {
     let base = base.trim_end_matches('/');
@@ -165,7 +163,7 @@ fn tool_choice(choice: Option<&ToolChoice>) -> Value {
 }
 
 pub async fn run(
-    state: Arc<AppState>,
+    http: reqwest::Client,
     req: MessagesRequest,
     target: Target,
     base_url: String,
@@ -193,8 +191,7 @@ pub async fn run(
     }
 
     info!(model = %target.model, url, messages = req.messages.len(), tools = req.tools.len(), "openai-compatible request");
-    let mut request = state
-        .http
+    let mut request = http
         .post(&url)
         .header("accept", "text/event-stream")
         .json(&body);

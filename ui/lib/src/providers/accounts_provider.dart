@@ -7,21 +7,18 @@ class AccountsProvider extends ChangeNotifier
   ///Собственный вход Claude Code (/login), null если не вошел
   ClaudeCodeAccount? get claudeCode => _state?.claudeCode;
   ChatGptAccount? get chatgpt => _state?.chatgpt;
-  ///Аккаунт Google в слоте 1 или 2, null если не привязан
-  GoogleAccount? google(int account) => _state?.google.where((g) => g.account == account).firstOrNull;
 
   LoginState? _login;
   ///Текущий вход через браузер (или его итог), null если входа не было
   LoginState? get login => _login;
-  bool isWaiting(AuthProvider provider, int account) =>
-      _login != null && _login!.phase == LoginPhase.waiting && _login!.provider == provider && _login!.account == account;
+  bool isWaiting(AuthProvider provider) =>
+      _login != null && _login!.phase == LoginPhase.waiting && _login!.provider == provider;
   bool get anyWaiting => _login?.phase == LoginPhase.waiting;
 
   UsageState? _usage;
   ///Лимиты Claude из последнего ответа Anthropic, пересланного прокси
   Usage? get claudeUsage => _usage?.claude;
   Usage? get codexUsage => _usage?.codex;
-  Usage? geminiUsage(int account) => _usage?.gemini.where((u) => u.account == account).firstOrNull;
 
   void updateUsage(UsageState state)
   {

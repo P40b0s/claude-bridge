@@ -17,8 +17,8 @@ use crate::error::ProxyError;
 use crate::routing::{Reasoning, Target};
 use crate::server::AppState;
 
-const OPENAI_API_BASE: &str = "https://api.openai.com/v1";
-const CHATGPT_CODEX_BASE: &str = "https://chatgpt.com/backend-api/codex";
+pub(crate) const OPENAI_API_BASE: &str = "https://api.openai.com/v1";
+pub(crate) const CHATGPT_CODEX_BASE: &str = "https://chatgpt.com/backend-api/codex";
 const ORIGINATOR: &str = "codex_cli_rs";
 const DEFAULT_CODEX_CLI_VERSION: &str = "0.144.1";
 const CONNECT_ATTEMPTS: u32 = 3;
@@ -169,13 +169,9 @@ pub fn effective_effort(req: &MessagesRequest, level: Option<Reasoning>) -> &'st
     let effort = match level {
         Some(Reasoning::None | Reasoning::Minimal) => "low",
         Some(level) => level.as_str(),
-        None => match config::env("CODEX_REASONING_EFFORT").as_deref().and_then(Reasoning::parse) {
-            Some(Reasoning::Low) => "low",
-            Some(Reasoning::Medium) => "medium",
-            Some(Reasoning::Xhigh) => "xhigh",
-            Some(Reasoning::Max) => "max",
-            _ => "high",
-        },
+        // The effort comes only from the model (`@effort`, a shortcut, a saved model); without
+        // one, the API's own default.
+        None => "medium",
     };
     if is_compaction_request(req) && !matches!(effort, "low" | "medium") { "medium" } else { effort }
 }
@@ -218,6 +214,7 @@ fn user_agent() -> String {
 
 pub async fn run(
     state: Arc<AppState>,
+    http: reqwest::Client,
     req: MessagesRequest,
     target: Target,
     auth: CodexAuth,
@@ -226,7 +223,7 @@ pub async fn run(
     let (backend, url, token, account_id) = match auth {
         CodexAuth::ApiKey(key) => ("api", format!("{OPENAI_API_BASE}/responses"), key, None),
         CodexAuth::ChatGpt => {
-            let creds = state.openai_auth.credentials(&state.http).await?;
+            let creds = state.openai_auth.credentials(&http).await?;
             ("chatgpt", format!("{CHATGPT_CODEX_BASE}/responses"), creds.access_token, creds.account_id)
         }
     };
@@ -256,7 +253,8 @@ pub async fn run(
         "input": input,
         "tools": to_responses_tools(&req.tools),
         "tool_choice": to_responses_tool_choice(req.tool_choice.as_ref()),
-        "parallel_tool_calls": false,
+        // Several tool calls per turn mean fewer turns, and each turn re-sends the whole context.
+        "parallel_tool_calls": config::env("CODEX_PARALLEL_TOOL_CALLS").as_deref() != Some("0"),
         "reasoning": reasoning,
         "store": false,
         "stream": true,
@@ -287,8 +285,7 @@ pub async fn run(
     let mut attempt = 0;
     let resp = loop {
         attempt += 1;
-        let mut rb = state
-            .http
+        let mut rb = http
             .post(&url)
             .bearer_auth(&token)
             .header("content-type", "application/json")

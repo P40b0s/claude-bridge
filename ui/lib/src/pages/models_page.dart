@@ -10,8 +10,6 @@ const _providers = <String, String>{
   'codex-oauth': 'ChatGPT / Codex',
   'openai': 'OpenAI API',
   'openai-compat': 'OpenAI-compatible',
-  'gemini-oauth': 'Google / Gemini',
-  'gemini': 'Gemini API',
 };
 
 class ModelsPage extends StatelessWidget {

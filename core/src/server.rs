@@ -3,7 +3,6 @@
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::Duration;
 
 use anyhow::Context;
 use axum::extract::{DefaultBodyLimit, Request, State};
@@ -23,14 +22,13 @@ use tokio_stream::wrappers::ReceiverStream;
 use tracing::{info, warn};
 
 use crate::anthropic::{Aggregator, Event, MessageWriter, MessagesRequest, Outcome};
-use crate::auth::google::GoogleAuth;
 use crate::auth::openai::OpenAiAuth;
 use crate::config;
 use crate::cooldown::Cooldowns;
 use crate::error::ProxyError;
+use crate::exits::Exits;
 use crate::providers::anthropic;
 use crate::providers::codex::{self, CodexAuth};
-use crate::providers::gemini::{self, GeminiAuth};
 use crate::providers::openai_compat;
 use crate::providers::reasoning_cache::ReasoningCache;
 use crate::request_log::{RequestLog, Tracker};
@@ -47,11 +45,10 @@ const MAX_SESSIONS: usize = 512;
 pub struct AppState {
     pub http: reqwest::Client,
     pub openai_auth: OpenAiAuth,
-    pub google_auth: GoogleAuth,
     pub reasoning_cache: ReasoningCache,
     pub log: RequestLog,
-    pub geo: geo::Guard,
     pub cooldowns: Cooldowns,
+    pub exits: Exits,
     /// Last model the user picked in any session; the fallback for sessions not seen yet.
     active: RwLock<Option<Target>>,
     /// Last model picked per Claude Code session (`x-claude-code-session-id`). Bare model
@@ -65,21 +62,17 @@ pub struct AppState {
 }
 
 pub fn http_client() -> anyhow::Result<reqwest::Client> {
-    Ok(reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(15))
-        // Upstreams drop idle keep-alive sockets; do not hand out stale ones.
-        .pool_idle_timeout(Duration::from_secs(30))
-        .build()?)
+    Ok(crate::exits::client_builder().build()?)
 }
 
 pub async fn serve(port: u16, default: Option<Target>) -> anyhow::Result<()> {
+    let http = http_client()?;
     let state = Arc::new(AppState {
-        http: http_client()?,
+        http: http.clone(),
+        exits: Exits::new(http),
         openai_auth: OpenAiAuth::default(),
-        google_auth: GoogleAuth::default(),
         reasoning_cache: ReasoningCache::default(),
         log: RequestLog::default(),
-        geo: geo::Guard::default(),
         cooldowns: Cooldowns::default(),
         active: RwLock::new(default),
         sessions: Mutex::default(),
@@ -95,6 +88,8 @@ pub async fn serve(port: u16, default: Option<Target>) -> anyhow::Result<()> {
         .route("/_shutdown", post(shutdown))
         .route("/_events", get(events))
         .route("/_model", axum::routing::put(pin_model).delete(unpin_model))
+        .route("/_exits", get(exits_report))
+        .route("/_tunnel", post(tunnel_port))
         .layer(DefaultBodyLimit::max(100 * 1024 * 1024))
         .layer(middleware::from_fn_with_state(state.clone(), check_host))
         .with_state(state.clone());
@@ -255,11 +250,6 @@ async fn messages(
     // Anthropic's convention: only `stream: true` streams. Claude Code's /model probe omits it.
     let stream = raw["stream"] == true;
     let tracker = state.log.begin(&requested, stream);
-    if let Err(e) = state.geo.check(&state.http).await {
-        warn!("{e}");
-        state.log.publish(tracker.failed(&e));
-        return e.into_response();
-    }
     match route_message(
         state.clone(),
         headers,
@@ -278,6 +268,49 @@ async fn messages(
             state.log.publish(tracker.failed(&e));
             e.into_response()
         }
+    }
+}
+
+/// Where every exit and provider comes out right now; starts SSH tunnels as needed.
+async fn exits_report(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    if let Err(e) = control_allowed(&headers) {
+        return e.into_response();
+    }
+    Json(state.exits.report(family_origin, true).await).into_response()
+}
+
+/// The local SOCKS5 port of an SSH exit's tunnel, for the UI and CLI calls that must leave the
+/// same way (usage limits, logins).
+async fn tunnel_port(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(body): Json<Value>) -> Response {
+    if let Err(e) = control_allowed(&headers) {
+        return e.into_response();
+    }
+    let exit = match crate::exits::Exit::parse(body["exit"].as_str().unwrap_or_default()) {
+        Ok(exit) => exit,
+        Err(e) => return ProxyError::bad_request(format!("{e:#}")).into_response(),
+    };
+    match state.exits.tunnel_port(&exit).await {
+        Ok(port) => Json(json!({ "port": port })).into_response(),
+        Err(e) => ProxyError::new(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
+    }
+}
+
+/// Upstream origin of a provider family, for the country check.
+pub fn family_origin(family: &str) -> String {
+    Provider::for_family(family).map(upstream_origin).unwrap_or_else(|| geo::NEUTRAL_ORIGIN.into())
+}
+
+/// Scheme and host the provider's calls go to, for the country check.
+pub fn upstream_origin(provider: Provider) -> String {
+    let base = match provider {
+        Provider::Anthropic => config::env("ANTHROPIC_UPSTREAM_URL").unwrap_or_else(|| anthropic::DEFAULT_UPSTREAM.into()),
+        Provider::CodexOauth => codex::CHATGPT_CODEX_BASE.into(),
+        Provider::Openai => codex::OPENAI_API_BASE.into(),
+        Provider::OpenaiCompat => config::env("OPENAI_COMPAT_BASE_URL").unwrap_or_default(),
+    };
+    match url::Url::parse(&base) {
+        Ok(url) if url.has_host() => url.origin().ascii_serialization(),
+        _ => geo::NEUTRAL_ORIGIN.into(),
     }
 }
 
@@ -320,6 +353,15 @@ async fn route_message(
     if let Err(e) = state.cooldowns.check(target.provider) {
         return Err(Box::new((e, tracker)));
     }
+    let family = target.provider.family();
+    let (exit, http) = match state.exits.for_family(family).await {
+        Ok(found) => found,
+        Err(e) => return Err(Box::new((e, tracker))),
+    };
+    let location = match geo::check(&http, family, &upstream_origin(target.provider)).await {
+        Ok(location) => location,
+        Err(e) => return Err(Box::new((e, tracker))),
+    };
     state.log.running(&tracker);
 
     info!(
@@ -328,6 +370,8 @@ async fn route_message(
         model = %target.model,
         reasoning = target.reasoning.map(|r| r.as_str()).unwrap_or("-"),
         stream,
+        exit = %exit.label(),
+        country = location.as_ref().map(|l| format!("{} {}", l.country_code, l.ip)).as_deref().unwrap_or("-"),
         "request"
     );
 
@@ -349,7 +393,7 @@ async fn route_message(
             let id = tracker.id();
             move |usage| state.log.set_usage(id, usage)
         };
-        return match anthropic::passthrough(&state, raw, &target.model, &headers, query, on_usage).await {
+        return match anthropic::passthrough(&http, raw, &target.model, &headers, query, on_usage).await {
             Ok(resp) => {
                 state
                     .log
@@ -379,17 +423,17 @@ async fn route_message(
     let key = |name: &str| config::env(name).ok_or_else(|| missing_key(name));
     let provider: BoxFuture<'static, Result<Outcome, ProxyError>> = match target.provider {
         Provider::CodexOauth => {
-            codex::run(state.clone(), req, target, CodexAuth::ChatGpt, writer).boxed()
+            codex::run(state.clone(), http, req, target, CodexAuth::ChatGpt, writer).boxed()
         }
         Provider::Openai => match key("OPENAI_API_KEY") {
             Ok(key) => {
-                codex::run(state.clone(), req, target, CodexAuth::ApiKey(key), writer).boxed()
+                codex::run(state.clone(), http, req, target, CodexAuth::ApiKey(key), writer).boxed()
             }
             Err(e) => return Err(Box::new((e, tracker))),
         },
         Provider::OpenaiCompat => match config::env("OPENAI_COMPAT_BASE_URL") {
             Some(base) => openai_compat::run(
-                state.clone(),
+                http,
                 req,
                 target,
                 base,
@@ -398,15 +442,6 @@ async fn route_message(
             )
             .boxed(),
             None => return Err(Box::new((missing_key("OPENAI_COMPAT_BASE_URL"), tracker))),
-        },
-        Provider::GeminiOauth => {
-            gemini::run(state.clone(), req, target, GeminiAuth::OAuth, writer).boxed()
-        }
-        Provider::Gemini => match key("GEMINI_API_KEY") {
-            Ok(key) => {
-                gemini::run(state.clone(), req, target, GeminiAuth::ApiKey(key), writer).boxed()
-            }
-            Err(e) => return Err(Box::new((e, tracker))),
         },
         Provider::Anthropic => unreachable!("handled above"),
     };

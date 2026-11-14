@@ -12,11 +12,19 @@ class GeoService
     _sub = GeoState.rustSignalStream.listen((pack) => provider.update(pack.message));
   }
 
+  ///Проверить выходы и провайдеров сейчас, не дожидаясь таймера
   void refresh() => RefreshLocation().sendSignalToRust();
 
-  ///Сохраняет настройку; прокси подхватывает её сразу, без перезапуска
+  ///Включает проверку и задаёт общий список стран; прокси подхватывает сразу, без перезапуска
   void setPolicy({required bool enabled, required Iterable<String> allowed}) =>
       SetGeoPolicy(enabled: enabled, allowed: allowed.toList()).sendSignalToRust();
+
+  ///Выход и страны одного провайдера; allowed == null - общий список
+  void setProvider(String family, {required String exit, required Iterable<String>? allowed}) =>
+      SetProviderGeo(family: family, exit: exit, allowed: allowed?.toList()).sendSignalToRust();
+
+  ///Заменяет список выходов (кроме прямого)
+  void setExits(Iterable<String> exits) => SetExits(exits: exits.toList()).sendSignalToRust();
 
   Future<void> dispose() async
   {

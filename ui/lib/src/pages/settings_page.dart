@@ -39,16 +39,6 @@ List<_Group> get _groups => [
   //API-ключи задаются на странице «Аккаунты»
   _Group('Codex', Icons.auto_awesome, [
     _Field(
-      'CODEX_REASONING_EFFORT',
-      tr('Усилие по умолчанию', 'Default effort'),
-      kind: _Kind.choice,
-      options: ['', 'low', 'medium', 'high', 'xhigh', 'max'],
-      hint: tr(
-        'Когда в модели не указан @effort; по умолчанию high',
-        'When the model has no @effort; high by default',
-      ),
-    ),
-    _Field(
       'CODEX_REASONING_SUMMARY',
       tr('Сводка рассуждений', 'Reasoning summary'),
       kind: _Kind.choice,
@@ -74,12 +64,27 @@ List<_Group> get _groups => [
       'CODEX_AUTO_COMPACT_WINDOW_TOKENS',
       tr('Автосжатие с, токенов', 'Auto-compact at, tokens'),
       kind: _Kind.number,
-      hint: tr('По умолчанию 95% окна', 'Default 95% of the window'),
+      hint: tr(
+        'По умолчанию 200000. Каждый вызов инструмента заново отправляет весь контекст, поэтому длинная сессия дорогая. '
+        'Для «любого claude через прокси» значение пишется в ~/.claude/settings.json',
+        'Default 200000. Every tool call re-sends the whole context, so a long session is expensive. '
+        'For "any claude through the proxy" the value goes into ~/.claude/settings.json',
+      ),
     ),
     _Field(
       'CODEX_DISABLE_COMPACT',
       tr('Отключить автосжатие', 'Disable auto-compact'),
       kind: _Kind.flag,
+    ),
+    _Field(
+      'CODEX_PARALLEL_TOOL_CALLS',
+      tr('Параллельные вызовы инструментов', 'Parallel tool calls'),
+      kind: _Kind.choice,
+      options: ['', '1', '0'],
+      hint: tr(
+        'По умолчанию включены: несколько инструментов за ход, меньше ходов и повторных отправок контекста. 0 - по одному',
+        'On by default: several tools per turn, fewer turns and context re-sends. 0 - one at a time',
+      ),
     ),
     _Field(
       'CODEX_DISABLE_REASONING_CACHE',
@@ -105,15 +110,6 @@ List<_Group> get _groups => [
         'Default https://api.anthropic.com',
       ),
       family: 'anthropic',
-    ),
-    _Field(
-      'GEMINI_BASE_URL',
-      tr('Адрес Gemini API', 'Gemini API address'),
-      hint: tr(
-        'По умолчанию https://generativelanguage.googleapis.com/v1beta',
-        'Default https://generativelanguage.googleapis.com/v1beta',
-      ),
-      family: 'gemini',
     ),
     _Field(
       'OPENAI_COMPAT_BASE_URL',

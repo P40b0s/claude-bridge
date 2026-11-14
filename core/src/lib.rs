@@ -1,4 +1,4 @@
-//! Local Anthropic-compatible proxy that runs Claude Code on Codex (GPT), Gemini,
+//! Local Anthropic-compatible proxy that runs Claude Code on Codex (GPT),
 //! the OpenAI API, or the Anthropic API, plus the logins and launcher around it.
 
 pub mod anthropic;
@@ -8,6 +8,7 @@ pub mod config;
 pub mod control;
 pub mod cooldown;
 pub mod error;
+pub mod exits;
 pub mod families;
 pub mod geo;
 pub mod launcher;

@@ -103,9 +103,9 @@ List<_Destination> get _destinations => [
     const RequestsPage(),
   ),
   _Destination(
-    tr('Страны', 'Countries'),
-    Icons.public_outlined,
-    Icons.public,
+    tr('Маршруты', 'Routes'),
+    Icons.alt_route_outlined,
+    Icons.alt_route,
     const GeoPage(),
   ),
   _Destination(

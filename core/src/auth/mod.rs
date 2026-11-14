@@ -1,7 +1,6 @@
 //! Shared OAuth plumbing: PKCE, JWT claims, token files and the one-shot loopback callback.
 
 pub mod claude_code;
-pub mod google;
 pub mod openai;
 
 use std::collections::HashMap;

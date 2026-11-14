@@ -7,7 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:claude_bridge_ui/src/i18n.dart';
 
-///Все провайдеры: вход Claude Code, входы через браузер (ChatGPT, два аккаунта Google), API-ключи и лимиты подписок
+///Все провайдеры: вход Claude Code, входы через браузер (ChatGPT), API-ключи и лимиты подписок
 class AccountsPage extends StatelessWidget {
   const AccountsPage({super.key});
 
@@ -19,8 +19,6 @@ class AccountsPage extends StatelessWidget {
       listenable: Listenable.merge([accounts, settings]),
       builder: (context, _) {
         final chatgpt = accounts.chatgpt;
-        final google1 = accounts.google(1);
-        final google2 = accounts.google(2);
         final codexUsage = accounts.codexUsage;
         final on = settings.isEnabled;
         if (settings.disabledProviders.containsAll(const [
@@ -28,7 +26,6 @@ class AccountsPage extends StatelessWidget {
           'codex',
           'openai',
           'openai-compat',
-          'gemini',
         ])) {
           return Center(
             child: Text(
@@ -53,7 +50,6 @@ class AccountsPage extends StatelessWidget {
                 title: 'ChatGPT / Codex',
                 icon: Icons.auto_awesome,
                 provider: AuthProvider.chatGpt,
-                account: 1,
                 signedIn: chatgpt != null,
                 details: [
                   if (chatgpt != null) ...[
@@ -91,54 +87,6 @@ class AccountsPage extends StatelessWidget {
                 ),
                 consoleUrl: 'platform.openai.com/api-keys',
               ),
-            if (on('gemini')) ...[
-              _AccountCard(
-                title: 'Google (Gemini)',
-                icon: Icons.diamond_outlined,
-                provider: AuthProvider.google,
-                account: 1,
-                signedIn: google1 != null,
-                details: _googleDetails(google1),
-                hint: tr(
-                  'Gemini через Code Assist или стандартный Gemini API.',
-                  'Gemini through Code Assist or the standard Gemini API.',
-                ),
-                usage: google1 == null
-                    ? null
-                    : _usage(
-                        accounts.geminiUsage(1),
-                        standardApi: google1.projectId == null,
-                      ),
-              ),
-              _AccountCard(
-                title: tr('Google, запасной аккаунт', 'Google, backup account'),
-                icon: Icons.diamond_outlined,
-                provider: AuthProvider.google,
-                account: 2,
-                signedIn: google2 != null,
-                details: _googleDetails(google2),
-                hint: tr(
-                  'Используется автоматически, когда первый аккаунт упирается в лимит (429).',
-                  'Used automatically when the first account hits its limit (429).',
-                ),
-                usage: google2 == null
-                    ? null
-                    : _usage(
-                        accounts.geminiUsage(2),
-                        standardApi: google2.projectId == null,
-                      ),
-              ),
-              _ApiKeyCard(
-                title: 'Gemini API',
-                icon: Icons.key,
-                envKey: 'GEMINI_API_KEY',
-                hint: tr(
-                  'Маршрут gemini без входа через Google.',
-                  'The gemini route, without a Google login.',
-                ),
-                consoleUrl: 'aistudio.google.com/apikey',
-              ),
-            ],
             if (on('anthropic'))
               _ApiKeyCard(
                 title: 'Anthropic API',
@@ -157,40 +105,19 @@ class AccountsPage extends StatelessWidget {
   }
 
   ///Лимиты в карточке: полосы, причина их отсутствия или ничего, пока не загрузились
-  static Widget? _usage(Usage? usage, {bool standardApi = false}) {
+  static Widget? _usage(Usage? usage) {
     if (usage == null) {
       return null;
     }
     if (usage.error != null) {
       return _UsageNote(
-        standardApi
-            ? tr(
-                'Лимиты: стандартный Gemini API их не сообщает, они есть только у Code Assist.',
-                "Limits: the standard Gemini API doesn't report them, only Code Assist does.",
-              )
-            : tr(
-                'Лимиты не получены: ${usage.error}',
-                'Limits not loaded: ${usage.error}',
-              ),
+        tr(
+          'Лимиты не получены: ${usage.error}',
+          'Limits not loaded: ${usage.error}',
+        ),
       );
     }
     return UsageBars(usage: usage);
-  }
-
-  List<String> _googleDetails(GoogleAccount? account) {
-    if (account == null) {
-      return const [];
-    }
-    return [
-      account.email ?? tr('неизвестный аккаунт', 'unknown account'),
-      account.projectId == null
-          ? tr('стандартный Gemini API', 'standard Gemini API')
-          : tr(
-              'Code Assist, проект ${account.projectId}',
-              'Code Assist, project ${account.projectId}',
-            ),
-      formatExpiry(account.expiresAt),
-    ];
   }
 }
 
@@ -199,7 +126,6 @@ class _AccountCard extends StatelessWidget {
     required this.title,
     required this.icon,
     required this.provider,
-    required this.account,
     required this.signedIn,
     required this.details,
     required this.hint,
@@ -209,7 +135,6 @@ class _AccountCard extends StatelessWidget {
   final String title;
   final IconData icon;
   final AuthProvider provider;
-  final int account;
   final bool signedIn;
   final List<String> details;
   final String hint;
@@ -219,7 +144,7 @@ class _AccountCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final service = context.appServices.accountsService;
-    final waiting = service.provider.isWaiting(provider, account);
+    final waiting = service.provider.isWaiting(provider);
     final login = service.provider.login;
     final theme = Theme.of(context);
     return _StatusCard(
@@ -241,13 +166,13 @@ class _AccountCard extends StatelessWidget {
               children: [
                 if (signedIn && canLogout)
                   OutlinedButton(
-                    onPressed: () => service.logout(provider, account: account),
+                    onPressed: () => service.logout(provider),
                     child: Text(tr(tr('Выйти', 'Log out'), 'Log out')),
                   ),
                 FilledButton(
                   onPressed: service.provider.anyWaiting
                       ? null
-                      : () => service.login(provider, account: account),
+                      : () => service.login(provider),
                   child: Text(
                     signedIn
                         ? tr('Войти заново', 'Log in again')

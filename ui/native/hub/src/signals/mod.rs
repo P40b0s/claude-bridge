@@ -30,14 +30,11 @@ pub struct PinModel {
 #[derive(Deserialize, Serialize, Clone, Copy, PartialEq, SignalPiece)]
 pub enum AuthProvider {
     ChatGpt,
-    Google,
 }
 
 #[derive(Deserialize, DartSignal)]
 pub struct LoginRequest {
     pub provider: AuthProvider,
-    /// Google account slot, 1 or 2.
-    pub account: i32,
 }
 
 #[derive(Deserialize, DartSignal)]
@@ -46,7 +43,6 @@ pub struct CancelLogin {}
 #[derive(Deserialize, DartSignal)]
 pub struct LogoutRequest {
     pub provider: AuthProvider,
-    pub account: i32,
 }
 
 /// Adds the proxy to Claude Code's settings.json, or takes it out.
@@ -91,11 +87,29 @@ pub struct SelectModel {
     pub id: String,
 }
 
-/// Turns the country check on or off and sets the countries it allows (ISO codes).
+/// Turns the country check on or off and sets the shared allow-list (ISO codes), used by
+/// providers without their own.
 #[derive(Deserialize, DartSignal)]
 pub struct SetGeoPolicy {
     pub enabled: bool,
     pub allowed: Vec<String>,
+}
+
+/// One provider family's exit and countries.
+#[derive(Deserialize, DartSignal)]
+pub struct SetProviderGeo {
+    /// `anthropic`, `codex`, `openai`, `openai-compat`.
+    pub family: String,
+    /// Exit spec from `GeoState.exits`; `direct` or empty for none.
+    pub exit: String,
+    /// Own allow-list; None follows the shared one.
+    pub allowed: Option<Vec<String>>,
+}
+
+/// Replaces the list of exits (`ssh://user@host[:port]`, `socks5://…`, `http://…`).
+#[derive(Deserialize, DartSignal)]
+pub struct SetExits {
+    pub exits: Vec<String>,
 }
 
 /// Look up the current IP and country now instead of on the next timer tick.
@@ -154,14 +168,6 @@ pub struct ChatGptAccount {
     pub subscription_until: Option<i64>,
 }
 
-#[derive(Serialize, Clone, SignalPiece)]
-pub struct GoogleAccount {
-    pub account: i32,
-    pub email: Option<String>,
-    pub project_id: Option<String>,
-    pub expires_at: i64,
-}
-
 /// Claude Code's own login; only its account record is read, never its credentials.
 #[derive(Serialize, Clone, SignalPiece)]
 pub struct ClaudeCodeAccount {
@@ -178,12 +184,11 @@ pub struct ClaudeCodeAccount {
 pub struct AccountsState {
     pub claude_code: Option<ClaudeCodeAccount>,
     pub chatgpt: Option<ChatGptAccount>,
-    pub google: Vec<GoogleAccount>,
 }
 
 #[derive(Serialize, Clone, SignalPiece)]
 pub struct UsageWindow {
-    /// Provider's name: `5h`, `7d_opus`, `primary`, a Gemini model id.
+    /// Provider's name: `5h`, `7d_opus`, `primary`.
     pub id: String,
     pub model: Option<String>,
     pub window_minutes: Option<i64>,
@@ -194,8 +199,6 @@ pub struct UsageWindow {
 
 #[derive(Serialize, Clone, SignalPiece)]
 pub struct Usage {
-    /// Google account slot.
-    pub account: Option<i32>,
     pub windows: Vec<UsageWindow>,
     pub limited: bool,
     /// Unix ms when the numbers were read.
@@ -208,7 +211,6 @@ pub struct Usage {
 pub struct UsageState {
     pub claude: Option<Usage>,
     pub codex: Option<Usage>,
-    pub gemini: Vec<Usage>,
 }
 
 #[derive(Serialize, Clone, Copy, SignalPiece)]
@@ -223,7 +225,6 @@ pub enum LoginPhase {
 #[derive(Serialize, RustSignal)]
 pub struct LoginState {
     pub provider: AuthProvider,
-    pub account: i32,
     pub phase: LoginPhase,
     pub url: Option<String>,
     pub message: Option<String>,
@@ -304,21 +305,56 @@ pub struct CountryInfo {
     pub name: String,
 }
 
-/// Where the traffic leaves from, and the country allow-list that gates the proxy.
-#[derive(Serialize, Clone, PartialEq, RustSignal)]
-pub struct GeoState {
+/// Where one exit (or one provider through its exit) comes out.
+#[derive(Serialize, Clone, PartialEq, SignalPiece)]
+pub struct ExitInfo {
+    /// Canonical spelling, the value to send back in `SetProviderGeo.exit`.
+    pub spec: String,
+    /// Shown to the user; no proxy password.
+    pub label: String,
+    /// `direct`, `ssh`, `proxy`.
+    pub kind: String,
     pub ip: Option<String>,
     pub country_code: Option<String>,
     pub country: Option<String>,
-    /// The last lookup failed (shown while an older location may still be displayed).
     pub error: Option<String>,
-    /// A lookup is in progress.
+}
+
+#[derive(Serialize, Clone, PartialEq, SignalPiece)]
+pub struct ProviderGeo {
+    pub family: String,
+    /// Host whose trace page tells the country.
+    pub origin: String,
+    /// The exit and where the provider sees the request come from.
+    pub exit: ExitInfo,
+    /// Countries this provider accepts.
+    pub allowed: Vec<String>,
+    /// `allowed` is the provider's own list, not the shared one.
+    pub own: bool,
+}
+
+/// Exits, per-provider routes and the country allow-lists that gate the proxy.
+#[derive(Serialize, Clone, PartialEq, RustSignal)]
+pub struct GeoState {
+    /// Direct connection (no exit), for the Home page.
+    pub ip: Option<String>,
+    pub country_code: Option<String>,
+    pub country: Option<String>,
+    pub error: Option<String>,
+    /// A check is in progress.
     pub checking: bool,
     pub checked_at: Option<i64>,
-    /// The check is on: requests are refused outside `allowed`.
+    /// The check is on: requests are refused outside each provider's list.
     pub enabled: bool,
+    /// Shared list for providers without their own.
     pub allowed: Vec<String>,
     pub countries: Vec<CountryInfo>,
+    /// `direct` first, then the configured exits.
+    pub exits: Vec<ExitInfo>,
+    /// Enabled provider families.
+    pub providers: Vec<ProviderGeo>,
+    /// SSH exits are checked by the proxy; without it they show as not checked.
+    pub proxy_running: bool,
 }
 
 #[derive(Serialize, Clone, SignalPiece)]

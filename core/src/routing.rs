@@ -9,8 +9,6 @@ pub enum Provider {
     CodexOauth,
     Openai,
     OpenaiCompat,
-    GeminiOauth,
-    Gemini,
     Anthropic,
 }
 
@@ -20,8 +18,6 @@ impl Provider {
             "codex-oauth" => Provider::CodexOauth,
             "openai" => Provider::Openai,
             "openai-compat" => Provider::OpenaiCompat,
-            "gemini-oauth" => Provider::GeminiOauth,
-            "gemini" => Provider::Gemini,
             "anthropic" => Provider::Anthropic,
             _ => return None,
         })
@@ -32,8 +28,6 @@ impl Provider {
             Provider::CodexOauth => "codex-oauth",
             Provider::Openai => "openai",
             Provider::OpenaiCompat => "openai-compat",
-            Provider::GeminiOauth => "gemini-oauth",
-            Provider::Gemini => "gemini",
             Provider::Anthropic => "anthropic",
         }
     }
@@ -45,9 +39,19 @@ impl Provider {
             Provider::CodexOauth => "codex",
             Provider::Openai => "openai",
             Provider::OpenaiCompat => "openai-compat",
-            Provider::GeminiOauth | Provider::Gemini => "gemini",
             Provider::Anthropic => "anthropic",
         }
+    }
+
+    /// The provider whose upstream host stands for a family (`family` reversed).
+    pub fn for_family(family: &str) -> Option<Self> {
+        Some(match family {
+            "codex" => Provider::CodexOauth,
+            "openai" => Provider::Openai,
+            "openai-compat" => Provider::OpenaiCompat,
+            "anthropic" => Provider::Anthropic,
+            _ => return None,
+        })
     }
 
     /// Stand-in for Claude Code's internal haiku/sonnet calls (titles, Explore subagent, quota probes).
@@ -56,7 +60,6 @@ impl Provider {
             Provider::CodexOauth => Some("gpt-5.6-luna"),
             Provider::Openai => Some("gpt-5-mini"),
             Provider::OpenaiCompat => None,
-            Provider::GeminiOauth | Provider::Gemini => Some("gemini-3-flash-preview"),
             Provider::Anthropic => None,
         }
     }
@@ -67,7 +70,6 @@ impl Provider {
             Provider::CodexOauth => Some("gpt-5.6-sol"),
             Provider::Openai => Some("gpt-5.5"),
             Provider::OpenaiCompat => None,
-            Provider::GeminiOauth | Provider::Gemini => Some("gemini-3.1-pro-preview"),
             Provider::Anthropic => None,
         }
     }
@@ -179,31 +181,6 @@ pub const PRESETS: &[Preset] = &[
         provider: Provider::CodexOauth,
         description: "GPT-5.5, previous frontier",
     },
-    Preset {
-        alias: "gemini",
-        provider: Provider::GeminiOauth,
-        description: "Gemini 3.1 Pro",
-    },
-    Preset {
-        alias: "gemini-flash",
-        provider: Provider::GeminiOauth,
-        description: "Gemini 3 Flash",
-    },
-    Preset {
-        alias: "gemini-3p",
-        provider: Provider::GeminiOauth,
-        description: "Gemini 3 Pro",
-    },
-    Preset {
-        alias: "gemini-25p",
-        provider: Provider::GeminiOauth,
-        description: "Gemini 2.5 Pro",
-    },
-    Preset {
-        alias: "gemini-25f",
-        provider: Provider::GeminiOauth,
-        description: "Gemini 2.5 Flash",
-    },
 ];
 
 /// Efforts offered as `@suffix`, weakest first.
@@ -224,13 +201,6 @@ fn shortcut(name: &str) -> Option<&'static str> {
         "opus" | "anthropic:opus" => "anthropic:claude-opus-5-5",
         "sonnet" | "anthropic:sonnet" => "anthropic:claude-sonnet-5-5",
         "haiku" | "anthropic:haiku" => "anthropic:claude-haiku-5-5",
-        // Gemini via Google login
-        "gemini" | "gemini-pro" | "gemini-31p" | "gp" => "gemini-oauth:gemini-3.1-pro-preview",
-        "gemini-flash" | "gf" => "gemini-oauth:gemini-3-flash-preview",
-        "gemini-3p" => "gemini-oauth:gemini-3-pro-preview",
-        "gemini-31f" => "gemini-oauth:gemini-3.1-flash-preview",
-        "gemini-25p" => "gemini-oauth:gemini-2.5-pro",
-        "gemini-25f" => "gemini-oauth:gemini-2.5-flash",
         // Codex: GPT-5.6 Sol (frontier) / Terra (balanced) / Luna (fast), GPT-5.5
         "codex" | "cx" | "sol" | "gpt56" | "gpt-5.6-sol" => "codex-oauth:gpt-5.6-sol@high",
         "terra" | "gpt-5.6-terra" => "codex-oauth:gpt-5.6-terra",
@@ -276,12 +246,21 @@ pub fn resolve(model_field: &str, defaults: Option<&Target>) -> Result<Target, S
     if expanded.to_ascii_lowercase().starts_with("claude-") {
         return Ok(match defaults {
             Some(d) if d.provider != Provider::Anthropic => {
-                let fallback = if expanded.to_ascii_lowercase().contains("opus") {
-                    d.provider.main_model()
+                let name = expanded.to_ascii_lowercase();
+                // Opus stands for the session's own model and effort. Haiku and sonnet calls
+                // (titles, summaries, the Explore subagent) are background work: a fast model with
+                // little thinking, since each of them carries Claude Code's whole system prompt.
+                let (fallback, effort) = if name.contains("opus") {
+                    (d.provider.main_model(), d.reasoning)
+                } else if name.contains("haiku") {
+                    (d.provider.fast_model(), Some(Reasoning::Low))
                 } else {
-                    d.provider.fast_model()
+                    (d.provider.fast_model(), Some(Reasoning::Medium))
                 };
-                Target::new(d.provider, fallback.unwrap_or(&d.model), reasoning)
+                match fallback {
+                    Some(model) => Target::new(d.provider, model, reasoning.or(effort)),
+                    None => Target::new(d.provider, &d.model, reasoning.or(d.reasoning)),
+                }
             }
             _ => Target::new(Provider::Anthropic, expanded, reasoning),
         });
@@ -301,7 +280,7 @@ pub fn resolve(model_field: &str, defaults: Option<&Target>) -> Result<Target, S
         Some(d) => Ok(Target::new(d.provider, expanded, reasoning.or(d.reasoning))),
         None => Err(format!(
             "cannot tell which provider serves model \"{model_field}\"; use provider:model \
-             (codex-oauth, openai, openai-compat, gemini-oauth, gemini, anthropic)"
+             (codex-oauth, openai, openai-compat, anthropic)"
         )),
     }
 }
@@ -385,18 +364,6 @@ mod tests {
             r("openai-compat:llama3.3"),
             Target::new(Provider::OpenaiCompat, "llama3.3", None)
         );
-        assert_eq!(
-            r("gemini/gemini-2.5-pro"),
-            Target::new(Provider::Gemini, "gemini-2.5-pro", None)
-        );
-        assert_eq!(
-            r("gemini-flash@low"),
-            Target::new(
-                Provider::GeminiOauth,
-                "gemini-3-flash-preview",
-                Some(Reasoning::Low)
-            )
-        );
     }
 
     #[test]
@@ -414,14 +381,18 @@ mod tests {
 
     #[test]
     fn claude_models_follow_active_provider() {
-        let active = codex("gpt-5.6-sol", None);
+        let active = codex("gpt-5.6-sol", Some(Reasoning::High));
         assert_eq!(
             resolve("claude-haiku-5-5", Some(&active)).unwrap(),
-            codex("gpt-5.6-luna", None)
+            codex("gpt-5.6-luna", Some(Reasoning::Low))
+        );
+        assert_eq!(
+            resolve("claude-sonnet-5", Some(&active)).unwrap(),
+            codex("gpt-5.6-luna", Some(Reasoning::Medium))
         );
         assert_eq!(
             resolve("claude-opus-5-5", Some(&active)).unwrap(),
-            codex("gpt-5.6-sol", None)
+            codex("gpt-5.6-sol", Some(Reasoning::High))
         );
         assert_eq!(
             r("claude-sonnet-5-5"),

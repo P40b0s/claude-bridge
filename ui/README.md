@@ -6,7 +6,7 @@ Flutter + [rinf](https://rinf.cunarist.org) панель управления д
 
 - `native/hub` — Rust-часть на акторах (`messages`), работает поверх `claude-bridge-core`:
   - `ProxyActor` следит за фоновым прокси, запускает и останавливает его, закрепляет модель, читает журнал запросов (`/_events`), прописывает прокси в настройки Claude Code;
-  - `AccountsActor` отвечает за входы в ChatGPT и Google;
+  - `AccountsActor` отвечает за вход в ChatGPT и лимиты подписок;
   - `SettingsActor` читает и пишет `~/.claude-bridge/.env`.
 - `native/hub/src/signals` — сигналы между Dart и Rust. Dart-классы генерируются в `lib/src/bindings` и в git не хранятся.
 - `lib/src/services` подписываются на сигналы Rust и отправляют команды, `lib/src/providers` хранят состояние для виджетов, `lib/src/pages` и `lib/src/controls` — интерфейс.

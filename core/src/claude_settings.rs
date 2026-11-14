@@ -15,6 +15,14 @@ const AUTH_TOKEN: &str = "ANTHROPIC_AUTH_TOKEN";
 const OPUS_MODEL: &str = "ANTHROPIC_DEFAULT_OPUS_MODEL";
 /// `/model opus` is an explicit pick of Claude, not a bare name the proxy treats as internal.
 const OPUS_TARGET: &str = "anthropic:claude-opus-5-5";
+/// Without it a connected `claude` compacts by Claude's own window, long after GPT sessions get
+/// expensive.
+const COMPACT_WINDOW: &str = "CLAUDE_CODE_AUTO_COMPACT_WINDOW";
+
+fn compact_value() -> Option<String> {
+    let ctx = crate::launcher::codex_context();
+    (!ctx.disable_compact).then(|| ctx.auto_compact_at.to_string())
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Connection {
@@ -91,18 +99,30 @@ pub fn connect(port: u16) -> anyhow::Result<()> {
     let Some(env) = env.as_object_mut() else { bail!("\"env\" in {} is not an object", settings_file().display()) };
     env.insert(BASE_URL.into(), json!(control::base_url(port)));
     env.entry(OPUS_MODEL).or_insert_with(|| json!(OPUS_TARGET));
+    if let Some(compact) = compact_value() {
+        env.entry(COMPACT_WINDOW).or_insert_with(|| json!(compact));
+    }
     sync_placeholder(env);
     write(&settings)
 }
 
-/// Keeps the placeholder token in step with Claude Code's login while connected; writes only on change.
+/// Keeps the placeholder token in step with Claude Code's login while connected, and the
+/// compaction window in place; writes only on change.
 pub fn sync_auth(port: u16) -> anyhow::Result<()> {
     if connection(port) != Connection::Connected {
         return Ok(());
     }
     let mut settings = read()?;
     let Some(env) = settings.get_mut("env").and_then(Value::as_object_mut) else { return Ok(()) };
-    if sync_placeholder(env) { write(&settings) } else { Ok(()) }
+    let mut changed = sync_placeholder(env);
+    // Settings connected before the compaction default existed get it too.
+    if let Some(compact) = compact_value()
+        && !env.contains_key(COMPACT_WINDOW)
+    {
+        env.insert(COMPACT_WINDOW.into(), json!(compact));
+        changed = true;
+    }
+    if changed { write(&settings) } else { Ok(()) }
 }
 
 /// Removes only what `connect` added; an empty `env` goes away too.
@@ -117,6 +137,12 @@ pub fn disconnect() -> anyhow::Result<()> {
     }
     if ours(env.get(OPUS_MODEL), &|m| m == OPUS_TARGET) {
         env.shift_remove(OPUS_MODEL);
+        changed = true;
+    }
+    if let Some(compact) = compact_value()
+        && ours(env.get(COMPACT_WINDOW), &|v| v == compact)
+    {
+        env.shift_remove(COMPACT_WINDOW);
         changed = true;
     }
     if ours(env.get(AUTH_TOKEN), &|t| t == PLACEHOLDER_TOKEN) {

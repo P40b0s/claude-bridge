@@ -17,6 +17,25 @@ pub struct ContextWindow {
     pub disable_compact: bool,
 }
 
+/// GPT-5.6 family window.
+const CODEX_WINDOW: u64 = 372_000;
+/// Where Claude Code compacts by default on GPT. Every tool call re-sends the whole context, cached
+/// or not, so a long session past this point costs the subscription more per turn than the
+/// summary loses.
+pub const CODEX_COMPACT_AT: u64 = 200_000;
+
+/// The window `claude-bridge codex` reports, from `CODEX_CONTEXT_WINDOW_TOKENS`,
+/// `CODEX_AUTO_COMPACT_WINDOW_TOKENS` and `CODEX_DISABLE_COMPACT`.
+pub fn codex_context() -> ContextWindow {
+    let num = |name: &str| config::env(name).and_then(|v| v.parse::<u64>().ok()).filter(|&v| v > 0);
+    let tokens = num("CODEX_CONTEXT_WINDOW_TOKENS").unwrap_or(CODEX_WINDOW);
+    ContextWindow {
+        tokens,
+        auto_compact_at: num("CODEX_AUTO_COMPACT_WINDOW_TOKENS").unwrap_or(CODEX_COMPACT_AT).min(tokens),
+        disable_compact: config::env("CODEX_DISABLE_COMPACT").as_deref() == Some("1"),
+    }
+}
+
 pub struct Launch {
     /// `provider:model` the proxy falls back to before the first request picks one.
     pub proxy_default: String,

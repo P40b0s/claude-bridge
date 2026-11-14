@@ -119,7 +119,9 @@ impl ProxyActor {
             match control::events(port).await {
                 Ok(stream) => {
                     let mut stream = std::pin::pin!(stream);
+                    let mut refusals = Refusals::default();
                     while let Some(record) = stream.next().await {
+                        refusals.check(&record);
                         RequestLogged {
                             entry: record.into(),
                         }
@@ -297,5 +299,45 @@ impl Notifiable<ConnectClaudeCode> for ProxyActor {
             Err(e) => ErrorSignal::error(&e),
         }
         self.refresh().await;
+    }
+}
+
+/// Warns when the proxy refuses a request because of the country or an exit that is down, so the
+/// refusal is not noticed only as an error inside Claude Code.
+#[derive(Default)]
+struct Refusals {
+    /// Message -> when it was last shown, Unix ms.
+    shown: std::collections::HashMap<String, i64>,
+}
+
+impl Refusals {
+    /// The same refusal is shown at most this often.
+    const REPEAT_MS: i64 = 5 * 60_000;
+    /// Older records are history replayed on connect, not news.
+    const FRESH_MS: i64 = 60_000;
+
+    fn check(&mut self, record: &claude_bridge_core::request_log::RequestRecord) {
+        let Some(error) = record.error.as_deref() else { return };
+        let geo = record.http_status == Some(451);
+        if !geo && !error.starts_with("request not sent") {
+            return;
+        }
+        let now = claude_bridge_core::auth::now_ms();
+        if now - record.started_at > Self::FRESH_MS {
+            return;
+        }
+        if self.shown.get(error).is_some_and(|at| now - at < Self::REPEAT_MS) {
+            return;
+        }
+        self.shown.insert(error.to_string(), now);
+        let title = if geo {
+            tr("Запрос отклонён: страна не разрешена", "Request refused: country not allowed")
+        } else {
+            tr("Запрос отклонён: выход недоступен", "Request refused: exit unavailable")
+        };
+        let provider = record.provider.as_deref().unwrap_or("?");
+        let body = format!("{provider}: {error}");
+        ErrorSignal::send(ErrorSeverity::Warning, format!("{title}. {body}"));
+        super::notifications::show(title.to_string(), body);
     }
 }

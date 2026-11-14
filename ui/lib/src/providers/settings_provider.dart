@@ -7,7 +7,6 @@ const disabledProvidersKey = 'CLAUDE_BRIDGE_DISABLED_PROVIDERS';
 String providerFamily(String provider) => switch (provider) {
   'codex-oauth' => 'codex',
   'openai-compat' => 'openai-compat',
-  'gemini-oauth' || 'gemini' => 'gemini',
   _ => provider,
 };
 
@@ -21,7 +20,7 @@ class SettingsProvider extends ChangeNotifier {
       _state?.fromEnvironment.contains(key) ?? false;
   List<String> get efforts => _state?.efforts ?? const [];
 
-  ///Отключённые группы провайдеров: anthropic, codex, openai, gemini
+  ///Отключённые группы провайдеров: anthropic, codex, openai, openai-compat
   Set<String> get disabledProviders =>
       value(disabledProvidersKey)
           .split(',')
@@ -30,7 +29,7 @@ class SettingsProvider extends ChangeNotifier {
           .toSet();
   bool isEnabled(String family) => !disabledProviders.contains(family);
 
-  ///Провайдер маршрута (codex-oauth, gemini...) включён; неизвестные считаются включёнными
+  ///Провайдер маршрута (codex-oauth, openai...) включён; неизвестные считаются включёнными
   bool providerEnabled(String? provider) =>
       provider == null || isEnabled(providerFamily(provider));
 

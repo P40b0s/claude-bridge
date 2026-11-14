@@ -97,6 +97,35 @@ pub async fn unpin_model(port: u16) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The local SOCKS5 port of the running proxy's tunnel for an SSH exit (started if needed).
+pub async fn tunnel_port(port: u16, exit: &str) -> anyhow::Result<u16> {
+    let resp = client(Some(Duration::from_secs(30)))
+        .post(format!("{}/_tunnel", base_url(port)))
+        .header(SHUTDOWN_HEADER, "1")
+        .json(&json!({ "exit": exit }))
+        .send()
+        .await
+        .context("proxy is not running")?;
+    if !resp.status().is_success() {
+        let body: Value = resp.json().await.unwrap_or_default();
+        bail!("{}", body["error"]["message"].as_str().unwrap_or("tunnel failed"));
+    }
+    let body: Value = resp.json().await?;
+    body["port"].as_u64().and_then(|p| u16::try_from(p).ok()).context("proxy gave no tunnel port")
+}
+
+/// Where every exit and provider comes out, checked by the running proxy (it owns the SSH tunnels).
+pub async fn exits_report(port: u16) -> anyhow::Result<crate::exits::Report> {
+    let resp = client(Some(Duration::from_secs(45)))
+        .get(format!("{}/_exits", base_url(port)))
+        .header(SHUTDOWN_HEADER, "1")
+        .send()
+        .await
+        .context("proxy is not running")?
+        .error_for_status()?;
+    Ok(resp.json().await?)
+}
+
 /// Recent request records followed by live updates; ends when the proxy goes away.
 pub async fn events(port: u16) -> anyhow::Result<impl Stream<Item = RequestRecord>> {
     let resp = client(None).get(format!("{}/_events", base_url(port))).send().await?.error_for_status()?;

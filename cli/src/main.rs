@@ -4,12 +4,12 @@ use anyhow::{Context, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use tracing_subscriber::fmt::writer::BoxMakeWriter;
 
-use claude_bridge_core::auth::{self, google, now_ms, openai};
+use claude_bridge_core::auth::{self, now_ms, openai};
 use claude_bridge_core::launcher::{self, ContextWindow, Launch};
-use claude_bridge_core::{claude_settings, config, control, models, routing, server, usage};
+use claude_bridge_core::{claude_settings, config, control, exits, models, routing, server, usage};
 
 #[derive(Parser)]
-#[command(name = "claude-bridge", version, about = "Run Claude Code on GPT (Codex), Gemini and other models")]
+#[command(name = "claude-bridge", version, about = "Run Claude Code on GPT (Codex) and other models")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -19,8 +19,6 @@ struct Cli {
 enum Command {
     /// Claude Code on GPT-5.6 via your ChatGPT login
     Codex(LaunchArgs),
-    /// Claude Code on Gemini via Google login (or GEMINI_API_KEY)
-    Gemini(LaunchArgs),
     /// Claude Code on the OpenAI API (OPENAI_API_KEY)
     Openai(LaunchArgs),
     /// Claude Code through the proxy to Claude (Claude Code's own login or ANTHROPIC_API_KEY)
@@ -32,19 +30,10 @@ enum Command {
         default: Option<String>,
     },
     /// Log in through the browser
-    Login {
-        provider: AuthProvider,
-        /// Google account slot; account 2 takes over when account 1 is rate limited
-        #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u8).range(1..=2))]
-        account: u8,
-    },
+    Login { provider: AuthProvider },
     /// Remove stored credentials
-    Logout {
-        provider: AuthProvider,
-        #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u8).range(1..=2))]
-        account: u8,
-    },
-    /// Switch the model of every running session, e.g. `terra@max` or `gemini-flash`
+    Logout { provider: AuthProvider },
+    /// Switch the model of every running session, e.g. `terra@max` or `luna`
     Model {
         /// /model spec; omit to show the current one
         model: Option<String>,
@@ -57,7 +46,7 @@ enum Command {
     },
     /// Show proxy and login status
     Status,
-    /// Show subscription limits: Claude, ChatGPT (Codex), Gemini
+    /// Show subscription limits: Claude, ChatGPT (Codex)
     Usage,
     /// Send every `claude` through the proxy (adds it to ~/.claude/settings.json)
     Connect,
@@ -83,7 +72,6 @@ struct LaunchArgs {
 #[derive(Clone, Copy, ValueEnum)]
 enum AuthProvider {
     Codex,
-    Google,
 }
 
 #[tokio::main]
@@ -121,7 +109,6 @@ async fn run(command: Command) -> anyhow::Result<()> {
             server::serve(config::port(), default).await
         }
         Command::Codex(args) => launch_codex(args).await,
-        Command::Gemini(args) => launch_gemini(args).await,
         Command::Openai(args) => {
             require_env("OPENAI_API_KEY")?;
             launcher::launch(args.into_launch("openai:gpt-5.5", Some("openai:gpt-5.5"), None)).await
@@ -133,11 +120,10 @@ async fn run(command: Command) -> anyhow::Result<()> {
             // Prefixed so the proxy sees an explicit choice, not one of Claude Code's internal calls.
             launcher::launch(args.into_launch("anthropic:claude-opus-5-5", Some("anthropic:opus"), None)).await
         }
-        Command::Login { provider, account } => login(provider, account).await,
-        Command::Logout { provider, account } => {
+        Command::Login { provider } => login(provider).await,
+        Command::Logout { provider } => {
             let removed = match provider {
                 AuthProvider::Codex => openai::logout(),
-                AuthProvider::Google => google::logout(account),
             };
             eprintln!("{}", if removed { "Logged out." } else { "Not logged in." });
             Ok(())
@@ -184,10 +170,6 @@ fn require_env(name: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn env_u64(name: &str) -> Option<u64> {
-    config::env(name).and_then(|v| v.parse().ok()).filter(|&v| v > 0)
-}
-
 fn expires_in(expires_at: i64) -> String {
     let minutes = (expires_at - now_ms()) / 60_000;
     if minutes > 0 { format!("expires in {minutes} min") } else { "expired (refreshes automatically)".into() }
@@ -196,7 +178,7 @@ fn expires_in(expires_at: i64) -> String {
 async fn launch_codex(args: LaunchArgs) -> anyhow::Result<()> {
     let tokens = match openai::load() {
         Some((tokens, _)) => tokens,
-        None => openai::login(&server::http_client()?, auth::print_login_url).await?,
+        None => openai::login(&exits::outside_client("codex").await?, auth::print_login_url).await?,
     };
     eprintln!(
         "  ChatGPT: {} ({})",
@@ -205,49 +187,16 @@ async fn launch_codex(args: LaunchArgs) -> anyhow::Result<()> {
     );
     eprintln!("  Models: /model sol | terra | luna | gpt55, effort: fast | smart | deep | xhigh | max or <model>@<effort>");
 
-    // GPT-5.6 family window; compact a little before the hard limit.
-    let tokens = env_u64("CODEX_CONTEXT_WINDOW_TOKENS").unwrap_or(372_000);
-    let compact_at = env_u64("CODEX_AUTO_COMPACT_WINDOW_TOKENS").unwrap_or(tokens * 95 / 100).min(tokens);
-    let context = ContextWindow {
-        tokens,
-        auto_compact_at: compact_at,
-        disable_compact: config::env("CODEX_DISABLE_COMPACT").as_deref() == Some("1"),
-    };
+    let context = launcher::codex_context();
     launcher::launch(args.into_launch("codex-oauth:gpt-5.6-sol", Some("codex"), Some(context))).await
 }
 
-async fn launch_gemini(args: LaunchArgs) -> anyhow::Result<()> {
-    let (default, model) = if config::env("GEMINI_API_KEY").is_some() && google::load(1).is_none() {
-        eprintln!("  Gemini: API key");
-        ("gemini:gemini-3.1-pro-preview", "gemini:gemini-3.1-pro-preview")
-    } else {
-        let tokens = match google::load(1) {
-            Some(tokens) => tokens,
-            None => google::login(&server::http_client()?, 1, auth::print_login_url).await?,
-        };
-        eprintln!(
-            "  Google: {} ({})",
-            tokens.email.as_deref().unwrap_or("unknown"),
-            tokens.project_id.as_deref().map(|p| format!("Code Assist: {p}")).unwrap_or_else(|| "standard API".into())
-        );
-        ("gemini-oauth:gemini-3.1-pro-preview", "gemini")
-    };
-    eprintln!("  Models: /model gemini | gemini-flash | gemini-3p | gemini-25p | gemini-25f, thinking: <model>@low|medium|high");
-    let context = ContextWindow { tokens: 1_000_000, auto_compact_at: 1_000_000, disable_compact: true };
-    launcher::launch(args.into_launch(default, Some(model), Some(context))).await
-}
-
-async fn login(provider: AuthProvider, account: u8) -> anyhow::Result<()> {
-    let http = server::http_client()?;
+async fn login(provider: AuthProvider) -> anyhow::Result<()> {
+    let http = exits::outside_client("codex").await?;
     match provider {
         AuthProvider::Codex => {
             let t = openai::login(&http, auth::print_login_url).await?;
             eprintln!("Logged in to ChatGPT as {} ({}).", t.email.as_deref().unwrap_or("unknown"), t.plan.as_deref().unwrap_or("unknown plan"));
-        }
-        AuthProvider::Google => {
-            let t = google::login(&http, account, auth::print_login_url).await?;
-            let mode = t.project_id.as_deref().map(|p| format!("Code Assist project {p}")).unwrap_or_else(|| "standard Gemini API".into());
-            eprintln!("Logged in to Google (account {account}) as {}, using {mode}.", t.email.as_deref().unwrap_or("unknown"));
         }
     }
     Ok(())
@@ -284,19 +233,7 @@ async fn status() -> anyhow::Result<()> {
         ),
         None => println!("ChatGPT:  not logged in (claude-bridge login codex)"),
     }
-    for account in 1..=2u8 {
-        match google::load(account) {
-            Some(t) => println!(
-                "Google {account}: {}, {}, token {}",
-                t.email.as_deref().unwrap_or("unknown"),
-                t.project_id.as_deref().map(|p| format!("Code Assist {p}")).unwrap_or_else(|| "standard API".into()),
-                expires_in(t.expires_at)
-            ),
-            None if account == 1 => println!("Google 1: not logged in (claude-bridge login google)"),
-            None => println!("Google 2: not linked (optional failover: claude-bridge login google --account 2)"),
-        }
-    }
-    for key in ["OPENAI_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY"] {
+    for key in ["OPENAI_API_KEY", "ANTHROPIC_API_KEY"] {
         println!("{key:<18}{}", if config::env(key).is_some() { "set" } else { "not set" });
     }
     let claude = match claude_settings::connection(port) {
@@ -310,7 +247,7 @@ async fn status() -> anyhow::Result<()> {
 }
 
 async fn usage_command() -> anyhow::Result<()> {
-    let report = usage::collect(&server::http_client()?, &google::GoogleAuth::default()).await;
+    let report = usage::collect().await;
     match &report.claude {
         Some(u) => print_usage("Claude", u, Some("from the last reply relayed by the proxy")),
         None if auth::claude_code::account().is_some() => {
@@ -321,9 +258,6 @@ async fn usage_command() -> anyhow::Result<()> {
     match &report.codex {
         Some(u) => print_usage("ChatGPT", u, None),
         None => println!("ChatGPT:  not logged in"),
-    }
-    for u in &report.gemini {
-        print_usage(&format!("Google {}", u.account.unwrap_or(1)), u, None);
     }
     Ok(())
 }

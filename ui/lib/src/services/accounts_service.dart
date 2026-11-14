@@ -19,17 +19,17 @@ class AccountsService
   ///Лимиты обновляются раз в минуту; это - сразу
   void refreshUsage() => RefreshUsage().sendSignalToRust();
 
-  ///Открывает браузер для входа; account - слот Google (1 или 2)
-  void login(AuthProvider authProvider, {int account = 1})
+  ///Открывает браузер для входа
+  void login(AuthProvider authProvider)
   {
-    LoginRequest(provider: authProvider, account: account).sendSignalToRust();
+    LoginRequest(provider: authProvider).sendSignalToRust();
   }
 
   void cancelLogin() => CancelLogin().sendSignalToRust();
 
-  void logout(AuthProvider authProvider, {int account = 1})
+  void logout(AuthProvider authProvider)
   {
-    LogoutRequest(provider: authProvider, account: account).sendSignalToRust();
+    LogoutRequest(provider: authProvider).sendSignalToRust();
   }
 
   Future<void> dispose() async

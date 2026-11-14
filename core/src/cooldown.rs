@@ -45,7 +45,6 @@ fn label(provider: Provider) -> &'static str {
         Provider::CodexOauth => "ChatGPT",
         Provider::Openai => "OpenAI API",
         Provider::OpenaiCompat => "OpenAI-compatible API",
-        Provider::GeminiOauth | Provider::Gemini => "Gemini",
         Provider::Anthropic => "Anthropic",
     }
 }
@@ -79,7 +78,7 @@ mod tests {
         let err = cooldowns.check(Provider::CodexOauth).unwrap_err();
         assert_eq!(err.status, StatusCode::TOO_MANY_REQUESTS);
         assert!(err.message.starts_with("ChatGPT usage limit until "), "{}", err.message);
-        assert!(cooldowns.check(Provider::Gemini).is_ok());
+        assert!(cooldowns.check(Provider::Openai).is_ok());
 
         let expired = ProxyError { retry_at: Some(now_ms() - 1), ..limited };
         cooldowns.note(Provider::CodexOauth, &expired);

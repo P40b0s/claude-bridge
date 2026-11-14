@@ -188,7 +188,6 @@ class LimitWatch extends ChangeNotifier {
     'codex-oauth' => 'ChatGPT',
     'openai' => 'OpenAI API',
     'openai-compat' => tr('OpenAI-совместимого API', 'OpenAI-compatible API'),
-    'gemini' || 'gemini-oauth' => 'Gemini',
     'anthropic' => 'Anthropic',
     _ => provider,
   };

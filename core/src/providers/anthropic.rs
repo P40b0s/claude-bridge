@@ -15,10 +15,9 @@ use serde_json::{Value, json};
 use crate::anthropic::Usage;
 use crate::config;
 use crate::error::ProxyError;
-use crate::server::AppState;
 use crate::usage;
 
-const DEFAULT_UPSTREAM: &str = "https://api.anthropic.com";
+pub(crate) const DEFAULT_UPSTREAM: &str = "https://api.anthropic.com";
 const DEFAULT_VERSION: &str = "2023-06-01";
 
 /// Placeholder token the launcher gives Claude Code when it has no login of its own.
@@ -51,7 +50,7 @@ pub fn has_client_credentials(headers: &HeaderMap) -> bool {
 }
 
 pub async fn passthrough(
-    state: &AppState,
+    http: &reqwest::Client,
     mut body: Value,
     model: &str,
     client: &HeaderMap,
@@ -64,7 +63,7 @@ pub async fn passthrough(
         url = format!("{url}?{query}");
     }
     body["model"] = json!(model);
-    let mut rb = state.http.post(url).json(&body);
+    let mut rb = http.post(url).json(&body);
 
     if has_client_credentials(client) {
         for (name, value) in client {

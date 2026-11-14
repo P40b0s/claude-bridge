@@ -80,19 +80,6 @@ List<_Family> get _families => [
         ? tr('адрес задан', 'URL set')
         : null,
   ),
-  _Family(
-    'gemini',
-    'Google (Gemini)',
-    Icons.diamond_outlined,
-    tr(
-      'Gemini через вход в Google (Code Assist) или по GEMINI_API_KEY.',
-      'Gemini through a Google login (Code Assist) or GEMINI_API_KEY.',
-    ),
-    'gemini, gemini-flash, gemini-oauth:…, gemini:…',
-    (a, s) => a.google(1) != null
-        ? tr('вход Google', 'Google login')
-        : (_hasKey(s, 'GEMINI_API_KEY') ? tr('API-ключ', 'API key') : null),
-  ),
 ];
 
 bool _hasKey(SettingsProvider s, String key) =>

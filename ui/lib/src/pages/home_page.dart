@@ -5,6 +5,7 @@ import 'package:claude_bridge_ui/src/format.dart';
 import 'package:claude_bridge_ui/src/providers/models_provider.dart';
 import 'package:claude_bridge_ui/src/providers/proxy_provider.dart';
 import 'package:claude_bridge_ui/src/services.dart';
+import 'package:claude_bridge_ui/src/providers/geo_provider.dart';
 import 'package:flutter/material.dart';
 import 'package:claude_bridge_ui/src/i18n.dart';
 
@@ -36,7 +37,7 @@ class LocationCard extends StatelessWidget {
         final theme = Theme.of(context);
         final hasLocation = state?.countryCode != null;
         return SectionCard(
-          title: tr('Местоположение', 'Location'),
+          title: tr('Местоположение (напрямую)', 'Location (direct)'),
           icon: Icons.public,
           trailing: IconButton(
             tooltip: tr('Обновить', 'Refresh'),
@@ -93,18 +94,12 @@ class LocationCard extends StatelessWidget {
                             Expanded(
                               child: Text(
                                 geo.blocking
-                                    ? (hasLocation
-                                          ? tr(
-                                              'Страны нет в списке разрешённых: запросы через прокси блокируются.',
-                                              'The country is not allowed: requests through the proxy are blocked.',
-                                            )
-                                          : tr(
-                                              'Страна не определена: запросы через прокси блокируются.',
-                                              'The country is unknown: requests through the proxy are blocked.',
-                                            ))
+                                    ? '${tr('Запросы отклоняются', 'Requests are refused')}: '
+                                          '${geo.blocked.map((p) => familyName(p.family)).join(', ')}. '
+                                          '${tr('Подробности на вкладке «Маршруты».', 'Details in the Routes tab.')}'
                                     : tr(
-                                        'Страна в списке разрешённых: проксирование работает.',
-                                        'The country is allowed: proxying works.',
+                                        'Все провайдеры выходят из разрешённых стран.',
+                                        'Every provider comes out in an allowed country.',
                                       ),
                               ),
                             ),
@@ -258,8 +253,8 @@ String _connectionHint(ProxyState state, bool running) {
     );
   }
   return tr(
-    'Выключено: через прокси идут только сессии, запущенные через claude-bridge codex, gemini и т. д. Включение пропишет адрес прокси в ${state.claudeCodeSettings}.',
-    'Off: only sessions started with claude-bridge codex, gemini etc. use the proxy. Turning this on writes the proxy address to ${state.claudeCodeSettings}.',
+    'Выключено: через прокси идут только сессии, запущенные через claude-bridge codex, openai и т. д. Включение пропишет адрес прокси в ${state.claudeCodeSettings}.',
+    'Off: only sessions started with claude-bridge codex, openai etc. use the proxy. Turning this on writes the proxy address to ${state.claudeCodeSettings}.',
   );
 }
 

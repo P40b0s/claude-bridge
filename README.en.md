@@ -5,7 +5,6 @@
 A local proxy that speaks the Anthropic Messages API, so Claude Code can run on other models:
 
 - **Codex**: GPT-5.6 Sol / Terra / Luna and GPT-5.5 on a ChatGPT subscription (browser login or Codex CLI tokens);
-- **Gemini**: through a Google login (Code Assist) or `GEMINI_API_KEY`;
 - **OpenAI API**: with `OPENAI_API_KEY`;
 - **OpenAI-compatible**: OpenRouter, Ollama, vLLM, LM Studio, DeepSeek and other Chat Completions APIs;
 - **Anthropic API**: with `ANTHROPIC_API_KEY`.
@@ -40,7 +39,6 @@ cargo install --path cli
 
 ```bash
 claude-bridge codex          # Claude Code on GPT-5.6 Sol (ChatGPT login on first run)
-claude-bridge gemini         # Claude Code on Gemini 3.1 Pro (Google login or GEMINI_API_KEY)
 claude-bridge openai         # OpenAI API, needs OPENAI_API_KEY
 claude-bridge anthropic      # Claude Opus: Claude Code's login or ANTHROPIC_API_KEY
 ```
@@ -56,10 +54,10 @@ The proxy is a separate process shared by all sessions. It keeps running after C
 | --- | --- |
 | `claude-bridge status` | state of the proxy, logins and keys |
 | `claude-bridge connect` / `disconnect` | add the proxy to `~/.claude/settings.json` so that every `claude` goes through it, or remove it |
-| `claude-bridge usage` | [subscription limits](#subscription-limits): Claude, ChatGPT, Gemini |
+| `claude-bridge usage` | [subscription limits](#subscription-limits): Claude, ChatGPT |
 | `claude-bridge stop` | stop the proxy |
-| `claude-bridge login codex` / `login google [--account 2]` | log in through the browser; Google account 2 takes over when the first one hits its limit (429) |
-| `claude-bridge logout codex` / `logout google [--account 2]` | delete the saved tokens |
+| `claude-bridge login codex` | log in to ChatGPT through the browser |
+| `claude-bridge logout codex` | delete the saved tokens |
 | `claude-bridge model terra@max` | switch every running session to a model |
 | `claude-bridge model --clear` | let `/model` choose the model again |
 | `claude-bridge model --list` | list the short names |
@@ -74,17 +72,16 @@ In Claude Code the model is picked with `/model <name>`. Short names:
 | `sol` (`codex`, `cx`) | `codex-oauth:gpt-5.6-sol`, high effort |
 | `terra`, `luna`, `gpt55` | GPT-5.6 Terra, GPT-5.6 Luna, GPT-5.5 |
 | `fast` / `smart` / `deep` / `xhigh` / `max` | Sol with low / medium / high / xhigh / max effort |
-| `gemini`, `gemini-flash`, `gemini-3p`, `gemini-25p`, `gemini-25f` | Gemini through a Google login |
 | `opus`, `anthropic:sonnet`, `anthropic:haiku` | Claude: through Claude Code's login or `ANTHROPIC_API_KEY` |
 
-The **Models** tab shows built-in and custom models together. A new Claude, GPT, Gemini or OpenAI-compatible model can be added without recompiling: set its name, provider, Model ID and optional effort. Custom models and the model selected on the Home page are stored in `~/.claude-bridge/models.json`. Disabling a provider hides its models from the lists without deleting them.
+The **Models** tab shows built-in and custom models together. A new Claude, GPT or OpenAI-compatible model can be added without recompiling: set its name, provider, Model ID and optional effort. Custom models and the model selected on the Home page are stored in `~/.claude-bridge/models.json`. Disabling a provider hides its models from the lists without deleting them.
 
 More options:
-- **Effort suffix.** `@low|medium|high|xhigh|max` works with any model, e.g. `/model terra@max` or `/model gemini-flash@low`.
-- **Explicit provider.** `provider:model`, where the provider is `codex-oauth`, `openai`, `openai-compat`, `gemini-oauth`, `gemini` or `anthropic`. For a compatible API: `/model openai-compat:llama3.3`.
+- **Effort suffix.** `@low|medium|high|xhigh|max` works with any model, e.g. `/model terra@max` or `/model luna@low`.
+- **Explicit provider.** `provider:model`, where the provider is `codex-oauth`, `openai`, `openai-compat` or `anthropic`. For a compatible API: `/model openai-compat:llama3.3`.
 - **A name without a provider** goes to the current provider as is.
 
-Claude Code makes its own background calls to `claude-haiku-*` and `claude-sonnet-*`: titles, subagents, checks. The proxy sends them to the provider of the session's main model (to its fast model), so they need no Anthropic key. They reach Claude only when the session's main model is Claude (`anthropic:…`).
+Claude Code makes its own background calls to `claude-haiku-*` and `claude-sonnet-*`: titles, subagents, checks. The proxy sends them to the provider of the session's main model, to its fast model, with low effort for `haiku` and medium for `sonnet` (each such call carries Claude Code's whole system prompt, about 37K tokens), so they need no Anthropic key. `claude-opus-*` goes to the main model with the session's effort. Effort comes only from the model: an `@…` suffix, a shortcut or a saved model; without one, medium, the API default. They reach Claude only when the session's main model is Claude (`anthropic:…`).
 
 ### Claude and other models in one session
 
@@ -92,7 +89,7 @@ The proxy never logs in to a Claude subscription itself: Anthropic's terms allow
 
 - If Claude Code is logged in (`/login`, with a subscription or a key), `claude-bridge` leaves that login alone. Otherwise Claude Code gets the placeholder `ANTHROPIC_AUTH_TOKEN=claude-bridge`: with it, Claude Code does not ask you to log in, all traffic goes to the other providers, and Claude models use `ANTHROPIC_API_KEY`.
 - Claude is picked explicitly: `/model opus` (`claude-bridge` maps it to `anthropic:claude-opus-5-5`), `anthropic:sonnet` or `anthropic:haiku`. Those requests go straight to Anthropic with Claude Code's login. The proxy forwards them untouched and stores nothing.
-- `/model sol`, `gemini` and the other models go through the proxy as usual.
+- `/model sol`, `terra` and the other models go through the proxy as usual.
 - Claude Code's background calls (`claude-haiku-*`, `claude-sonnet-*` and so on) go wherever **this** session's main model goes. While a non-Claude model is selected, the session sends nothing to Anthropic. Sessions are told apart by the `X-Claude-Code-Session-Id` header and don't affect each other.
 - A pinned model ("Model for all sessions") overrides everything.
 
@@ -114,20 +111,38 @@ Nothing else in the file changes. `claude-bridge disconnect` (or the same switch
 
 ## Providers
 
-On the "Providers" tab, each group can be turned off: Anthropic (Claude), ChatGPT / Codex, OpenAI API, OpenAI-compatible, Google (Gemini, both accounts and `GEMINI_API_KEY`). A disabled provider:
+On the "Providers" tab, each group can be turned off: Anthropic (Claude), ChatGPT / Codex, OpenAI API, OpenAI-compatible. A disabled provider:
 - disappears from the UI: accounts, limits, the model list, settings and the request log; its limits are not fetched;
 - cannot be the selected model the UI starts the proxy with;
-- is blocked by the proxy: a request to it (say, `/model gemini`) gets a 400 error with a hint.
+- is blocked by the proxy: a request to it (say, `/model sol`) gets a 400 error with a hint.
 
-Logins and keys are kept. The list is stored in `CLAUDE_BRIDGE_DISABLED_PROVIDERS` (comma-separated `anthropic`, `codex`, `openai`, `openai-compat`, `gemini`) and applies immediately, no restart needed.
+Logins and keys are kept. The list is stored in `CLAUDE_BRIDGE_DISABLED_PROVIDERS` (comma-separated `anthropic`, `codex`, `openai`, `openai-compat`) and applies immediately, no restart needed.
 
-## Location and country restriction
+## Routes: exits and countries
 
-The home page shows your current public IP, its country and flag. They come from [ipwho.is](https://ipwho.is), with [api.country.is](https://api.country.is) as a fallback. The lookup goes out the same way as provider traffic, so a system proxy or VPN is taken into account.
+The "Routes" tab is a builder: for each provider you choose **what** its traffic goes through and **which countries** it may be sent from.
 
-On the "Countries" tab you can allow proxying only from the checked countries: Germany, the Netherlands, Sweden, Estonia, Latvia, the United Kingdom, France, Lithuania, Switzerland, Poland, the USA. With the restriction on, the proxy checks the country before each request (the answer is cached for a minute). If the country is not on the list, nothing is sent to the provider and the proxy returns a 451 error naming the IP and country. If the country cannot be determined, the request is blocked too, unless a previous answer is less than 10 minutes old.
+**Exits.** Besides the direct connection you can add:
+- `ssh://user@host[:port]`: your own server. The proxy opens an `ssh -D` tunnel (a local SOCKS5 port) itself and keeps it while it runs. The server only needs `sshd` with key login. Login must work with no password and no prompts: `ssh-copy-id user@host`, then try `ssh user@host`. The key is found as usual: `~/.ssh`, ssh-agent, `~/.ssh/config`. The server needs `AllowTcpForwarding yes`, which is the default on Fedora;
+- `socks5://host:port`, `http://[user:pass@]host:port`: an existing proxy, such as a VPN client's local SOCKS port.
 
-The settings are `GEO_GUARD_ENABLED` and `GEO_ALLOWED_COUNTRIES`; they apply immediately. The country list is `COUNTRIES` in [core/src/geo.rs](core/src/geo.rs).
+Each provider (Anthropic, ChatGPT / Codex, OpenAI API, OpenAI-compatible) has its own exit. If the exit is down (the tunnel did not come up, the proxy does not answer), the request is **not sent direct**: it is refused with a 502. Host names behind SOCKS are resolved on the far side (`socks5h`), so local DNS does not leak.
+
+**Countries.** With the restriction on, before every request, with no caching, the proxy asks the provider's host for Cloudflare's `/cdn-cgi/trace` page **through that provider's exit**. That host is `api.anthropic.com`, `chatgpt.com` or `api.openai.com`. The answer shows the IP and country as the provider itself sees them. It is the same domain as the real request, so domain-based routing rules in a VPN client or on the router apply to the check the same way. If the host has no such page (often the case for OpenAI-compatible APIs), `www.cloudflare.com` is asked through the same exit: exact behind an SSH server or proxy, approximate when direct. A provider can have its own country list; otherwise the shared one applies. If the country is not allowed or cannot be determined, nothing is sent to the provider and the proxy returns a 451 naming the host, IP and country. The app shows a notification about it.
+
+The home page shows the direct connection's country and, below it, which providers are blocked right now.
+
+The settings apply immediately, no restart needed:
+
+| Variable | Purpose |
+| --- | --- |
+| `GEO_GUARD_ENABLED` | `1`: check the country |
+| `GEO_ALLOWED_COUNTRIES` | shared list: comma-separated ISO codes (`DE,NL,SE`); `-` for none; unset means every country on the list |
+| `GEO_ALLOWED_<PROVIDER>` | a provider's own list: `GEO_ALLOWED_ANTHROPIC`, `_CODEX`, `_OPENAI`, `_OPENAI_COMPAT` |
+| `CLAUDE_BRIDGE_EXITS` | comma-separated exits: `ssh://root@203.0.113.7,socks5://127.0.0.1:1080` |
+| `CLAUDE_BRIDGE_EXIT_<PROVIDER>` | a provider's exit, e.g. `CLAUDE_BRIDGE_EXIT_CODEX=ssh://root@203.0.113.7`; unset means direct |
+
+The country list is `COUNTRIES` in [core/src/geo.rs](core/src/geo.rs).
 
 ## Subscription limits
 
@@ -137,22 +152,21 @@ The settings are `GEO_GUARD_ENABLED` and `GEO_ALLOWED_COUNTRIES`; they apply imm
 | --- | --- |
 | Claude | `anthropic-ratelimit-unified-*` headers in Anthropic's replies to Claude Code; the proxy keeps the latest in `~/.claude-bridge/claude-usage.json`. They appear after the first Claude request through the proxy |
 | ChatGPT / Codex | `chatgpt.com/backend-api/wham/usage`, the same request as `/status` in Codex CLI |
-| Gemini | `retrieveUserQuota` in Code Assist. The standard Gemini API reports no limits |
 
 The UI refreshes limits every minute and on demand.
 
 When ChatGPT answers 429 `usage_limit_reached`, the proxy remembers the reset time and answers on its own until then instead of sending the conversation upstream; Claude Code gets `x-should-retry: false` and does not retry. The UI warns with a notification and the tray icon when a limit is reached, when Claude's or Codex's 5-hour window is 80% used, and when at the current pace it will run out before the reset.
 
-Subscription details are shown there as well. For ChatGPT: the plan and the paid plan's end date from the ID token. For Claude: the plan, start date and billing type from `~/.claude.json`; Claude Code does not store an end date. Gemini has no such details. In the CLI, `claude-bridge status` shows them.
+Subscription details are shown there as well. For ChatGPT: the plan and the paid plan's end date from the ID token. For Claude: the plan, start date and billing type from `~/.claude.json`; Claude Code does not store an end date. In the CLI, `claude-bridge status` shows them.
 
 ## UI
 
 A Flutter app that controls the same background proxy:
-- **Home**: current location (IP, country, flag), starting and stopping the proxy (by default it starts with the app), routing any `claude` through the proxy, the model for all sessions;
+- **Home**: the direct connection's location (IP, country, flag) and which providers are blocked, starting and stopping the proxy (by default it starts with the app), routing any `claude` through the proxy, the model for all sessions;
 - **Providers**: which providers are in use ([details](#providers));
-- **Accounts**: every provider in one place: Claude Code's login, browser login for ChatGPT and two Google accounts, OpenAI, Gemini and Anthropic API keys, subscription limits;
+- **Accounts**: every provider in one place: Claude Code's login, browser login for ChatGPT, OpenAI and Anthropic API keys, subscription limits;
 - **Requests**: a live request log with model, timing, tokens (input / cached / output) and errors;
-- **Countries**: the country restriction ([details](#location-and-country-restriction));
+- **Routes**: exits (direct, SSH server, proxy) and allowed countries per provider ([details](#routes-exits-and-countries));
 - **Settings**: an editor for `~/.claude-bridge/.env`.
 
 Notifications pop up as toasts in the bottom-right corner; their history opens from the button in the header, with a filter by type and copying of the text.
@@ -167,31 +181,30 @@ The UI is in English or Russian: switch with the `RU` / `EN` button in the heade
 
 Everything lives in `~/.claude-bridge/` (another folder can be set with `CLAUDE_BRIDGE_HOME`):
 - `.env`: keys and options;
-- `codex-oauth.json`, `google-oauth*.json`: tokens, mode `0600`;
+- `codex-oauth.json`: tokens, mode `0600`;
 - `proxy.log`: the proxy log.
 
-Environment variables take precedence over `.env`. After changing settings, restart the proxy: `claude-bridge stop` or the button in the UI. The exception is providers and the country restriction: the proxy re-reads them on every request.
+Environment variables take precedence over `.env`. After changing settings, restart the proxy: `claude-bridge stop` or the button in the UI. The exception is providers and routes: the proxy re-reads them on every request.
 
 | Variable | Purpose |
 | --- | --- |
-| `OPENAI_API_KEY`, `GEMINI_API_KEY`, `ANTHROPIC_API_KEY` | keys for the API routes |
+| `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` | keys for the API routes |
 | `OPENAI_COMPAT_BASE_URL` | OpenAI-compatible API URL; `/chat/completions` is appended automatically |
 | `OPENAI_COMPAT_API_KEY` | optional OpenAI-compatible API key |
 | `~/.claude-bridge/models.json` | custom models and the model selected in the UI |
 | `CLAUDE_BRIDGE_PORT` | proxy port, `17870` by default |
 | `CLAUDE_BRIDGE_CONTEXT_WARN_TOKENS` | context size per request at which the UI warns with a tray icon and a notification; default `150000`, `0` turns it off |
-| `CODEX_REASONING_EFFORT` | Codex effort when no `@suffix` is given; `high` by default |
 | `CODEX_REASONING_SUMMARY` | `auto` / `concise` / `detailed` / `none` |
 | `CODEX_TEXT_VERBOSITY` | `low` / `medium` / `high` |
-| `CODEX_CONTEXT_WINDOW_TOKENS`, `CODEX_AUTO_COMPACT_WINDOW_TOKENS`, `CODEX_DISABLE_COMPACT` | the context window `claude-bridge codex` reports to Claude Code |
+| `CODEX_CONTEXT_WINDOW_TOKENS`, `CODEX_AUTO_COMPACT_WINDOW_TOKENS`, `CODEX_DISABLE_COMPACT` | the context window (372K) and auto-compact threshold (200K by default) `claude-bridge codex` reports to Claude Code. The threshold also goes into `~/.claude/settings.json` (`CLAUDE_CODE_AUTO_COMPACT_WINDOW`) for "any claude through the proxy". Every tool call re-sends the whole context, cached or not, so compacting earlier saves a lot of the limit |
+| `CODEX_PARALLEL_TOOL_CALLS` | `0`: one tool call per turn; by default several, which means fewer turns and fewer context re-sends |
 | `CODEX_DISABLE_REASONING_CACHE` | `1`: don't pass encrypted reasoning on to the next turn |
-| `ANTHROPIC_UPSTREAM_URL`, `GEMINI_BASE_URL` | alternative API addresses |
+| `ANTHROPIC_UPSTREAM_URL` | alternative Anthropic API address |
 | `CLAUDE_BRIDGE_BIN` | CLI path for the UI |
 | `CLAUDE_BRIDGE_AUTOSTART` | `0`: the UI doesn't start the proxy when it opens |
 | `CLAUDE_BRIDGE_LANG` | UI language: `ru` or `en` |
-| `CLAUDE_BRIDGE_DISABLED_PROVIDERS` | disabled providers: comma-separated `anthropic`, `codex`, `openai`, `gemini` |
-| `GEO_GUARD_ENABLED` | `1`: proxy only from the allowed countries |
-| `GEO_ALLOWED_COUNTRIES` | allowed countries, comma-separated ISO codes (`DE,NL,SE`); `-` for none; unset means every country on the list |
+| `CLAUDE_BRIDGE_DISABLED_PROVIDERS` | disabled providers: comma-separated `anthropic`, `codex`, `openai`, `openai-compat` |
+| `GEO_*`, `CLAUDE_BRIDGE_EXIT*` | [routes and countries](#routes-exits-and-countries) |
 | `CLAUDE_BRIDGE_LOG` | log filter, e.g. `claude_bridge_core=debug` |
 
 **ChatGPT login.**
@@ -202,8 +215,9 @@ Environment variables take precedence over `.env`. After changing settings, rest
 
 - The proxy listens on `127.0.0.1` only.
 - Requests whose `Host` header is not `127.0.0.1:<port>` or `localhost:<port>` are rejected. This defeats DNS rebinding: a web page can't use your subscriptions through the proxy.
-- The control endpoints (`/_model`, `/_shutdown`) require the `x-claude-bridge` header. A browser won't send it from another site without a CORS preflight.
-- For the location card, the UI queries ipwho.is (or api.country.is) once a minute; the proxy does so only while the country restriction is on. These services see your public IP.
+- The control endpoints (`/_model`, `/_shutdown`, `/_exits`) require the `x-claude-bridge` header. A browser won't send it from another site without a CORS preflight.
+- Only Cloudflare determines the country: `/cdn-cgi/trace` on the provider hosts and on `www.cloudflare.com`. The UI asks once a minute, the proxy before every request while the restriction is on. No third-party geo-IP services are used.
+- SSH tunnels run with `BatchMode=yes` (no password prompts) and `StrictHostKeyChecking=accept-new`: a new server's key is remembered on first connect, and if it later changes the tunnel will not come up.
 
 ## Development
 
