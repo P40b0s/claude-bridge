@@ -60,8 +60,9 @@ fn snapshot_file(profile: &str) -> anyhow::Result<PathBuf> {
 fn account_from(value: &Value) -> Option<ClaudeCodeAccount> {
     let account = value.as_object()?;
     let field = |name: &str| {
-        account[name]
-            .as_str()
+        account
+            .get(name)
+            .and_then(Value::as_str)
             .filter(|s| !s.is_empty())
             .map(String::from)
     };
@@ -269,4 +270,20 @@ fn saved_profile_ids() -> Vec<String> {
         .collect();
     ids.sort();
     ids
+}
+
+#[cfg(test)]
+mod tests {
+    use super::account_from;
+    use serde_json::json;
+
+    #[test]
+    fn account_allows_missing_optional_fields() {
+        let account = account_from(&json!({"emailAddress": "test@example.com"})).unwrap();
+        assert_eq!(account.email.as_deref(), Some("test@example.com"));
+        assert!(account.organization.is_none());
+        assert!(account.plan.is_none());
+        assert!(account.billing.is_none());
+        assert!(account.subscription_since.is_none());
+    }
 }

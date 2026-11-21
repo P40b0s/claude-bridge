@@ -174,7 +174,7 @@ impl UsageScanner {
             return;
         }
         let usage = self.usage.get_or_insert_with(Usage::default);
-        let field = |name: &str| u[name].as_u64();
+        let field = |name: &str| u.get(name).and_then(Value::as_u64);
         if let Some(n) = field("input_tokens") {
             usage.input_tokens = n;
         }

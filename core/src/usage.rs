@@ -180,11 +180,13 @@ fn parse_reset_outcome(reply: &Value) -> ResetOutcome {
 }
 
 fn parse_codex(body: &Value) -> Usage {
-    let limits = &body["rate_limit"];
+    let limits = body.get("rate_limit").and_then(Value::as_object);
     let windows = ["primary_window", "secondary_window"]
         .into_iter()
         .filter_map(|name| {
-            let w = limits[name].as_object()?;
+            let w = limits
+                .and_then(|limits| limits.get(name))
+                .and_then(Value::as_object)?;
             Some(Window {
                 id: name.trim_end_matches("_window").into(),
                 model: None,
@@ -199,8 +201,14 @@ fn parse_codex(body: &Value) -> Usage {
         .collect();
     Usage {
         windows,
-        limited: limits["limit_reached"].as_bool() == Some(true)
-            || limits["allowed"].as_bool() == Some(false),
+        limited: limits
+            .and_then(|limits| limits.get("limit_reached"))
+            .and_then(Value::as_bool)
+            == Some(true)
+            || limits
+                .and_then(|limits| limits.get("allowed"))
+                .and_then(Value::as_bool)
+                == Some(false),
         observed_at: now_ms(),
         ..Usage::default()
     }

@@ -145,6 +145,11 @@ pub async fn launch(launch: Launch) -> anyhow::Result<()> {
     // Without one it gets a placeholder token, and Claude models use ANTHROPIC_API_KEY.
     match claude_code::account() {
         Some(account) => {
+            // A bridge placeholder inherited by this process predates the OAuth login and would
+            // override Claude Code's saved credentials in the child process.
+            if std::env::var("ANTHROPIC_AUTH_TOKEN").as_deref() == Ok(PLACEHOLDER_TOKEN) {
+                cmd.env_remove("ANTHROPIC_AUTH_TOKEN");
+            }
             // The proxy's key from .env would take over Claude Code's login; one the user exported stays.
             if settings::read()
                 .get("ANTHROPIC_API_KEY")

@@ -229,6 +229,13 @@ async fn login_claude(profile: &str) -> anyhow::Result<String> {
     );
     let mut command = Command::new("claude");
     command.kill_on_drop(true).args(["auth", "login"]);
+    // A running bridge may still have the placeholder inherited from before an OAuth login.
+    // Do not let it shadow the credentials that `claude auth login` is about to create.
+    if std::env::var("ANTHROPIC_AUTH_TOKEN").as_deref()
+        == Ok(claude_bridge_core::providers::anthropic::PLACEHOLDER_TOKEN)
+    {
+        command.env_remove("ANTHROPIC_AUTH_TOKEN");
+    }
     for (key, value) in claude_bridge_core::claude_settings::managed_env() {
         command.env(key, value);
     }
