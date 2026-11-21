@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use async_trait::async_trait;
-use claude_bridge_core::{browser, config, families, routing, settings};
+use claude_bridge_core::{browser, config, egress, families, routing, settings};
 use messages::prelude::{Actor, Address, Context, Notifiable};
 use rinf::RustSignal;
 use tokio::task::JoinSet;
@@ -77,6 +77,25 @@ impl Notifiable<SaveSettings> for SettingsActor {
             .into_iter()
             .map(|(k, v)| (k, Some(v.trim().to_string()).filter(|v| !v.is_empty())))
             .collect();
+        let value = |key: &str| match updates.get(key) {
+            Some(new) => new.clone(),
+            None => crate::configuration::setting(key),
+        };
+        if updates.contains_key("CLAUDE_BRIDGE_PORT") || updates.contains_key(egress::PORT_KEY) {
+            let proxy_port = match value("CLAUDE_BRIDGE_PORT") {
+                Some(v) => v.parse::<u16>().ok(),
+                None => Some(config::DEFAULT_PORT),
+            };
+            let checked = match proxy_port {
+                Some(port) => egress::validate_ports(port, value(egress::PORT_KEY).as_deref()),
+                None => Err(anyhow::anyhow!("CLAUDE_BRIDGE_PORT: not a port number")),
+            };
+            if let Err(e) = checked {
+                ErrorSignal::error(&e);
+                Self::send_state();
+                return;
+            }
+        }
         match settings::write(&updates) {
             Ok(()) if affects_proxy => ErrorSignal::send(
                 ErrorSeverity::Info,

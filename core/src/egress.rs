@@ -76,6 +76,32 @@ pub fn port() -> Option<u16> {
     }
 }
 
+/// Checks a proxy port and a `CLAUDE_BRIDGE_EGRESS_PORT` value before they are saved. The egress
+/// takes two ports in a row (Anthropic, then the Codex browser proxy), so its base cannot be
+/// 65535, and neither may overlap the proxy's own port.
+pub fn validate_ports(proxy_port: u16, egress: Option<&str>) -> anyhow::Result<()> {
+    let base = match egress.map(str::trim).filter(|v| !v.is_empty()) {
+        None => proxy_port
+            .checked_add(1)
+            .context("the proxy port must be below 65535 to leave room for the egress proxy")?,
+        Some(value) => match value.parse::<u16>() {
+            Ok(0) => return Ok(()),
+            Ok(port) => port,
+            Err(_) => bail!("{PORT_KEY}={value}: not a port number"),
+        },
+    };
+    anyhow::ensure!(
+        base < u16::MAX,
+        "egress port {base} leaves no room for the Codex browser proxy on the next port; use at most 65534"
+    );
+    anyhow::ensure!(
+        proxy_port != base && proxy_port != base + 1,
+        "egress ports {base} and {} overlap the proxy port {proxy_port}",
+        base + 1
+    );
+    Ok(())
+}
+
 /// Port for a family. Anthropic is the configured egress port; Codex is the next port.
 pub fn family_port(family: &str) -> Option<u16> {
     let base = port()?;
@@ -100,6 +126,12 @@ pub async fn serve(state: Arc<server::AppState>) {
     let mut tasks = tokio::task::JoinSet::new();
     for &family in BROWSER_FAMILIES {
         let Some(port) = family_port(family) else {
+            if port().is_some() {
+                warn!(
+                    "{family} egress proxy: no port left after {}",
+                    port().unwrap_or_default()
+                );
+            }
             continue;
         };
         let state = state.clone();
@@ -290,11 +322,43 @@ async fn handle(
             .await?;
         upstream.write_all(&head.buf[head.head_len..]).await?;
     } else {
-        // HTTP/1.1 servers accept the absolute form, so the request goes on unchanged.
-        upstream.write_all(&head.buf).await?;
+        // One request per connection: only this head was looked at, so a kept-alive connection
+        // would carry the client's next request, maybe for another host, to this one.
+        upstream
+            .write_all(&close_after(&head.buf[..head.head_len]))
+            .await?;
+        upstream.write_all(&head.buf[head.head_len..]).await?;
     }
     let _ = tokio::io::copy_bidirectional(&mut client, &mut upstream).await;
     Ok(())
+}
+
+/// A plain-HTTP proxy request head for the origin server: hop-by-hop headers dropped and
+/// `Connection: close` set. HTTP/1.1 servers accept the absolute-form target as it is.
+fn close_after(head: &[u8]) -> Vec<u8> {
+    let text = String::from_utf8_lossy(head);
+    let mut lines = text.split("\r\n");
+    let mut out = String::with_capacity(text.len() + 20);
+    out.push_str(lines.next().unwrap_or_default());
+    out.push_str("\r\n");
+    for line in lines.filter(|l| !l.is_empty()) {
+        let name = line.split(':').next().unwrap_or_default().trim();
+        if [
+            "connection",
+            "proxy-connection",
+            "keep-alive",
+            "proxy-authorization",
+        ]
+        .iter()
+        .any(|h| name.eq_ignore_ascii_case(h))
+        {
+            continue;
+        }
+        out.push_str(line);
+        out.push_str("\r\n");
+    }
+    out.push_str("Connection: close\r\n\r\n");
+    out.into_bytes()
 }
 
 /// A TCP stream to `host:port` through `exit`. Names go to the far side where there is one, and
@@ -498,6 +562,29 @@ async fn http_connect(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plain_http_requests_close_after_one() {
+        let head = b"GET http://a.test/x HTTP/1.1\r\nHost: a.test\r\nProxy-Connection: keep-alive\r\nConnection: keep-alive\r\nAccept: */*\r\n\r\n";
+        assert_eq!(
+            String::from_utf8(close_after(head)).unwrap(),
+            "GET http://a.test/x HTTP/1.1\r\nHost: a.test\r\nAccept: */*\r\nConnection: close\r\n\r\n"
+        );
+    }
+
+    #[test]
+    fn egress_ports_need_room_for_codex() {
+        assert!(validate_ports(8082, None).is_ok());
+        assert!(validate_ports(8082, Some("0")).is_ok());
+        assert!(validate_ports(8082, Some("9000")).is_ok());
+        assert!(validate_ports(8082, Some("65534")).is_ok());
+        assert!(validate_ports(8082, Some("65535")).is_err());
+        assert!(validate_ports(65534, None).is_err());
+        assert!(validate_ports(65535, None).is_err());
+        assert!(validate_ports(8082, Some("8081")).is_err());
+        assert!(validate_ports(8082, Some("8082")).is_err());
+        assert!(validate_ports(8082, Some("x")).is_err());
+    }
 
     #[test]
     fn splits_connect_targets() {

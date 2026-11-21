@@ -47,25 +47,77 @@ pub fn open(url: &str, family: &str) -> anyhow::Result<()> {
 
 pub fn open_with_profile(url: &str, family: &str, profile: Option<&str>) -> anyhow::Result<()> {
     let choice = setting();
-    let mut command = match &choice {
-        Some(choice) => resolve(choice)?,
-        None => default_command(),
-    };
-    let account_profile = profile
+    let isolated_profile = profile
         .map(str::to_string)
-        .or_else(|| config::env(PROFILE_OVERRIDE_KEY));
-    let configured_profile = profile_setting();
-    if choice.is_none() && configured_profile.is_some() {
-        bail!("{PROFILE_KEY} needs a browser selected in {KEY}");
-    }
-    // A named account can still log in with the system browser when no fixed browser was chosen;
-    // it simply cannot get automatic profile isolation or browser proxying in that case.
-    if let Some(profile) = account_profile.or(configured_profile)
-        && choice.is_some()
-    {
+        .or_else(|| config::env(PROFILE_OVERRIDE_KEY))
+        .or_else(profile_setting);
+    let mut command = match (&choice, &isolated_profile) {
+        (Some(choice), _) => resolve(choice)?,
+        // An account profile must never land in the ordinary browser profile: its cookies belong
+        // to another account and its traffic skips the egress route.
+        (None, Some(_)) => system_browser().with_context(|| {
+            format!(
+                "the system browser cannot be opened with a separate profile; choose Firefox or a \
+                 Chromium-based browser in the browser setting ({KEY})"
+            )
+        })?,
+        (None, None) => default_command(),
+    };
+    if let Some(profile) = isolated_profile {
         isolate(&mut command, family, &profile)?;
     }
     spawn(&command, url)
+}
+
+/// The system default browser as a command that accepts profile and proxy arguments, if it is
+/// one [`isolate`] knows.
+fn system_browser() -> Option<Vec<String>> {
+    let command = default_browser_command()?;
+    kind(&command).is_some().then_some(command)
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn default_browser_command() -> Option<Vec<String>> {
+    let output = Command::new("xdg-settings")
+        .args(["get", "default-web-browser"])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    let id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    installed()
+        .into_iter()
+        .find(|b| b.id == id)
+        .map(|b| b.command)
+}
+
+#[cfg(windows)]
+fn default_browser_command() -> Option<Vec<String>> {
+    let query = |key: &str, value: &[&str]| {
+        let output = Command::new("reg")
+            .arg("query")
+            .arg(key)
+            .args(value)
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .ok()?;
+        let text = String::from_utf8_lossy(&output.stdout).into_owned();
+        text.lines()
+            .find_map(|line| line.split_once("REG_SZ").map(|(_, v)| v.trim().to_string()))
+    };
+    let prog_id = query(
+        r"HKCU\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice",
+        &["/v", "ProgId"],
+    )?;
+    let line = query(&format!(r"HKCR\{prog_id}\shell\open\command"), &["/ve"])?;
+    let command = split_command(&line);
+    (!command.is_empty()).then_some(command)
+}
+
+#[cfg(not(any(windows, all(unix, not(target_os = "macos")))))]
+fn default_browser_command() -> Option<Vec<String>> {
+    None
 }
 
 fn profile_setting() -> Option<String> {
@@ -103,69 +155,245 @@ fn safe_name(value: &str) -> String {
 }
 
 fn insert_before_url(command: &mut Vec<String>, args: impl IntoIterator<Item = String>) {
-    let at = command
+    let mut at = command
         .iter()
         .position(|a| a.contains("%u") || a.contains("%1"))
         .unwrap_or(command.len());
+    // Windows registers Firefox as `firefox.exe -osint -url "%1"`: `-url` must stay with the link.
+    while at > 1 && matches!(command[at - 1].as_str(), "-url" | "--url" | "-osint" | "--") {
+        at -= 1;
+    }
     command.splice(at..at, args);
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Firefox,
+    Chromium,
+}
+
+/// The last path component, for both `/` and `\\` separators, lowercased without `.exe`/`.app`.
+fn base_name(path: &str) -> String {
+    let name = path
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(path)
+        .to_ascii_lowercase();
+    name.trim_end_matches(".exe")
+        .trim_end_matches(".app")
+        .to_string()
+}
+
+/// Names that identify the browser: the program, the app of `open -a`, the app id and
+/// `--command` of `flatpak run`. Other arguments and directories are not looked at.
+fn identifying_names(command: &[String]) -> Vec<String> {
+    let Some(program) = command.first() else {
+        return Vec::new();
+    };
+    let program_name = base_name(program);
+    let mut names = vec![program_name.clone()];
+    match program_name.as_str() {
+        "open" => {
+            if let Some(app) = command
+                .iter()
+                .position(|a| a == "-a")
+                .and_then(|i| command.get(i + 1))
+            {
+                names.push(base_name(app));
+            }
+        }
+        "flatpak" => {
+            if let Some(id) = flatpak_app(command) {
+                names.push(id.to_ascii_lowercase());
+            }
+            names.extend(
+                command
+                    .iter()
+                    .filter_map(|a| a.strip_prefix("--command="))
+                    .map(base_name),
+            );
+        }
+        _ => {}
+    }
+    names
+}
+
+fn kind(command: &[String]) -> Option<Kind> {
+    const FIREFOX: &[&str] = &["firefox", "librewolf", "waterfox", "zen"];
+    const CHROMIUM: &[&str] = &[
+        "chromium",
+        "chrome",
+        "brave",
+        "msedge",
+        "microsoft-edge",
+        "microsoft edge",
+        "com.microsoft.edge",
+        "vivaldi",
+        "opera",
+        "thorium",
+        "yandex",
+    ];
+    let names = identifying_names(command);
+    let has = |list: &[&str]| names.iter().any(|n| list.iter().any(|b| n.contains(b)));
+    if has(FIREFOX) {
+        Some(Kind::Firefox)
+    } else if has(CHROMIUM) {
+        Some(Kind::Chromium)
+    } else {
+        None
+    }
+}
+
+/// The app id in `flatpak run [options] <app id> [args]`.
+fn flatpak_app(command: &[String]) -> Option<&str> {
+    let run = command.iter().position(|a| a == "run")?;
+    command[run + 1..]
+        .iter()
+        .find(|a| !a.starts_with('-'))
+        .map(String::as_str)
+}
+
+/// Snap's name when the program is a snap (`/snap/bin/firefox`, or Ubuntu's `/usr/bin/firefox`
+/// wrapper that starts it).
+fn snap_name(program: &str) -> Option<String> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    let name = base_name(program);
+    let snap = Path::new("/snap/bin").join(&name);
+    if !snap.exists() {
+        return None;
+    }
+    let path = if program.contains('/') {
+        PathBuf::from(program)
+    } else {
+        std::env::var_os("PATH")
+            .into_iter()
+            .flat_map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
+            .map(|dir| dir.join(&name))
+            .find(|p| p.is_file())?
+    };
+    let resolved = std::fs::canonicalize(&path).unwrap_or(path.clone());
+    let is_snap = resolved.starts_with("/snap/")
+        || resolved == Path::new("/usr/bin/snap")
+        || std::fs::metadata(&path).is_ok_and(|m| m.len() < 64 * 1024)
+            && std::fs::read(&path).is_ok_and(|data| {
+                data.windows(b"/snap/bin/".len())
+                    .any(|w| w == b"/snap/bin/")
+            });
+    is_snap.then_some(name)
+}
+
+/// Where the isolated profile lives. Sandboxed browsers cannot open `~/.claude-bridge`: a snap
+/// gets no hidden directories in the home folder, a Flatpak only what it was granted. Both can
+/// always use their own data directory.
+fn profile_root(command: &[String], family: &str, profile: &str) -> PathBuf {
+    let tail = |base: PathBuf| base.join(safe_name(profile)).join(family);
+    let program = command.first().map(String::as_str).unwrap_or_default();
+    if base_name(program) == "flatpak"
+        && let Some(app) = flatpak_app(command)
+    {
+        return tail(
+            config::home_dir()
+                .join(".var/app")
+                .join(app)
+                .join("data/claude-bridge-browser"),
+        );
+    }
+    if let Some(snap) = snap_name(program) {
+        return tail(
+            config::home_dir()
+                .join("snap")
+                .join(snap)
+                .join("common/claude-bridge-browser"),
+        );
+    }
+    tail(config::data_dir().join("browser"))
+}
+
+/// `open -a <app> %u` passes its own flags to `open`; the browser's go after `--args`. `-n` starts
+/// a separate instance, as a running one would ignore a different profile.
+fn macos_open_args(command: &mut Vec<String>) {
+    if command.first().map(String::as_str) != Some("open") {
+        return;
+    }
+    let Some(app) = command
+        .iter()
+        .position(|a| a == "-a")
+        .and_then(|i| command.get(i + 1))
+        .cloned()
+    else {
+        return;
+    };
+    *command = vec![
+        "open".into(),
+        "-n".into(),
+        "-a".into(),
+        app,
+        "--args".into(),
+        "%u".into(),
+    ];
+}
+
+/// Fails unless the browser egress proxy answers, so the isolated browser is never left pointing
+/// at a port nothing listens on.
+fn ensure_listening(port: u16) -> anyhow::Result<()> {
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(500))
+        .map(drop)
+        .with_context(|| {
+            format!(
+                "the browser egress proxy is not running on 127.0.0.1:{port}; start claude-bridge \
+                 and try again"
+            )
+        })
 }
 
 fn isolate(command: &mut Vec<String>, family: &str, profile: &str) -> anyhow::Result<()> {
     let proxy = crate::egress::family_url(family)
         .with_context(|| format!("no browser egress proxy for provider family {family}"))?;
     let port = crate::egress::family_port(family).context("browser egress proxy is disabled")?;
-    let joined = command.join(" ").to_ascii_lowercase();
-    let root = config::data_dir()
-        .join("browser")
-        .join(safe_name(profile))
-        .join(family);
+    let Some(kind) = kind(command) else {
+        bail!(
+            "the selected browser cannot be isolated automatically; use Firefox, Chromium, Chrome, Brave, Edge, Vivaldi or Opera"
+        );
+    };
+    ensure_listening(port)?;
+    let root = profile_root(command, family, profile);
     std::fs::create_dir_all(&root)
         .with_context(|| format!("creating browser profile {}", root.display()))?;
+    macos_open_args(command);
 
     let fingerprint = fingerprint_setting();
     let locale = crate::claude_settings::language();
-    if joined.contains("firefox")
-        || joined.contains("librewolf")
-        || joined.contains("waterfox")
-        || joined.contains("zen")
-    {
-        write_firefox_prefs(&root, port, fingerprint == "resist", locale.as_deref())?;
-        insert_before_url(
-            command,
-            [
-                "--no-remote".into(),
-                "--profile".into(),
-                root.display().to_string(),
-            ],
-        );
-        return Ok(());
-    }
-    if [
-        "chromium", "chrome", "brave", "edge", "vivaldi", "opera", "thorium", "yandex",
-    ]
-    .iter()
-    .any(|name| joined.contains(name))
-    {
-        let mut args = vec![
-            format!("--user-data-dir={}", root.display()),
-            format!("--proxy-server={proxy}"),
-            "--proxy-bypass-list=localhost;127.0.0.1;[::1]".into(),
-            "--no-first-run".into(),
-            "--no-default-browser-check".into(),
-            "--disable-sync".into(),
-            "--disable-background-networking".into(),
-        ];
-        if fingerprint == "exit"
-            && let Some(locale) = locale
-        {
-            args.push(format!("--lang={}", browser_locale(&locale)));
+    match kind {
+        Kind::Firefox => {
+            write_firefox_prefs(&root, port, fingerprint == "resist", locale.as_deref())?;
+            // No `--no-remote`: with it a second link fails while this profile is already open.
+            // Firefox hands the link to the running instance of the same profile instead.
+            insert_before_url(command, ["--profile".into(), root.display().to_string()]);
         }
-        insert_before_url(command, args);
-        return Ok(());
+        Kind::Chromium => {
+            let mut args = vec![
+                format!("--user-data-dir={}", root.display()),
+                format!("--proxy-server={proxy}"),
+                "--proxy-bypass-list=localhost;127.0.0.1;[::1]".into(),
+                // WebRTC UDP does not go through an HTTP proxy and would show the real address.
+                "--force-webrtc-ip-handling-policy=disable_non_proxied_udp".into(),
+                "--no-first-run".into(),
+                "--no-default-browser-check".into(),
+                "--disable-sync".into(),
+                "--disable-background-networking".into(),
+            ];
+            if fingerprint == "exit"
+                && let Some(locale) = locale
+            {
+                args.push(format!("--lang={}", browser_locale(&locale)));
+            }
+            insert_before_url(command, args);
+        }
     }
-    bail!(
-        "the selected browser cannot be isolated automatically; use Firefox, Chromium, Chrome, Brave, Edge, Vivaldi or Opera"
-    )
+    Ok(())
 }
 
 fn browser_locale(locale: &str) -> String {
@@ -192,6 +420,15 @@ user_pref("network.proxy.http_port", {port});
 user_pref("network.proxy.ssl", "127.0.0.1");
 user_pref("network.proxy.ssl_port", {port});
 user_pref("network.proxy.no_proxies_on", "localhost, 127.0.0.1, ::1");
+user_pref("network.proxy.share_proxy_settings", true);
+// WebRTC must not reveal the real address past the proxy; DNS stays with the proxy too.
+user_pref("media.peerconnection.ice.proxy_only", true);
+user_pref("media.peerconnection.ice.default_address_only", true);
+user_pref("media.peerconnection.ice.no_host", true);
+user_pref("network.dns.disablePrefetch", true);
+user_pref("network.predictor.enabled", false);
+user_pref("network.prefetch-next", false);
+user_pref("network.trr.mode", 5);
 user_pref("browser.shell.checkDefaultBrowser", false);
 user_pref("browser.startup.homepage_override.mstone", "ignore");
 user_pref("datareporting.healthreport.uploadEnabled", false);
@@ -209,7 +446,8 @@ user_pref("intl.accept_languages", "{locale}, en-US, en");
 /// A tiny opener Claude Code can call through its standard `BROWSER` variable. This keeps `/login`
 /// on the same browser/profile policy as links opened by the bridge UI.
 pub fn claude_code_opener() -> anyhow::Result<Option<String>> {
-    if setting().is_none() {
+    // With neither a fixed browser nor an isolatable system one, Claude Code opens links itself.
+    if setting().is_none() && system_browser().is_none() {
         return Ok(None);
     }
     let cli =
@@ -265,12 +503,10 @@ fn default_command() -> Vec<String> {
     if cfg!(target_os = "macos") {
         vec!["open".into(), "%u".into()]
     } else if cfg!(windows) {
-        // `start` treats the first quoted argument as a window title.
+        // Not `cmd /C start`: cmd splits an unquoted URL at `&`, cutting off OAuth parameters.
         vec![
-            "cmd".into(),
-            "/C".into(),
-            "start".into(),
-            String::new(),
+            "rundll32".into(),
+            "url.dll,FileProtocolHandler".into(),
             "%u".into(),
         ]
     } else {
@@ -664,6 +900,88 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn browser_kind_comes_from_the_program_name() {
+        assert_eq!(
+            kind(&args(&["/usr/bin/firefox", "%u"])),
+            Some(Kind::Firefox)
+        );
+        assert_eq!(
+            kind(&args(&[
+                r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                "%1"
+            ])),
+            Some(Kind::Chromium)
+        );
+        assert_eq!(
+            kind(&args(&[
+                "/usr/bin/flatpak",
+                "run",
+                "--branch=stable",
+                "org.mozilla.firefox",
+                "%u"
+            ])),
+            Some(Kind::Firefox)
+        );
+        assert_eq!(
+            kind(&args(&[
+                "open",
+                "-a",
+                "/Applications/Brave Browser.app",
+                "%u"
+            ])),
+            Some(Kind::Chromium)
+        );
+        // Directories and arguments do not count.
+        assert_eq!(
+            kind(&args(&["/home/operator/zen/epiphany", "--edge", "%u"])),
+            None
+        );
+    }
+
+    #[test]
+    fn link_options_stay_with_the_link() {
+        let mut command = args(&["firefox.exe", "-osint", "-url", "%1"]);
+        insert_before_url(&mut command, args(&["--profile", "p"]));
+        assert_eq!(
+            command,
+            args(&["firefox.exe", "--profile", "p", "-osint", "-url", "%1"])
+        );
+    }
+
+    #[test]
+    fn macos_flags_go_after_args() {
+        let mut command = args(&["open", "-a", "/Applications/Firefox.app", "%u"]);
+        macos_open_args(&mut command);
+        insert_before_url(&mut command, args(&["--profile", "/p"]));
+        assert_eq!(
+            command,
+            args(&[
+                "open",
+                "-n",
+                "-a",
+                "/Applications/Firefox.app",
+                "--args",
+                "--profile",
+                "/p",
+                "%u"
+            ])
+        );
+    }
+
+    #[test]
+    fn flatpak_profiles_live_in_the_app_data() {
+        let command = args(&["flatpak", "run", "com.brave.Browser", "%u"]);
+        let root = profile_root(&command, "anthropic", "claude-work");
+        assert!(root.ends_with(
+            ".var/app/com.brave.Browser/data/claude-bridge-browser/claude-work/anthropic"
+        ));
     }
 
     #[test]

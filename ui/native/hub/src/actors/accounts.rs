@@ -24,16 +24,36 @@ pub struct AccountsActor {
     /// Limits being read; a tick does not start another while one runs.
     usage: Option<JoinHandle<()>>,
     /// The browser login in progress, if any. Only one callback server can run at a time.
-    login: Option<(AuthProvider, String, JoinHandle<()>)>,
+    login: Option<Login>,
+    /// Tells a finished login from one that was replaced or cancelled meanwhile.
+    login_generation: u64,
     _owned_tasks: JoinSet<()>,
 }
 
 impl Actor for AccountsActor {}
 
+struct Login {
+    provider: AuthProvider,
+    profile: String,
+    generation: u64,
+    task: JoinHandle<()>,
+}
+
+impl Login {
+    /// Stops the login and waits until its cleanup (restoring the previous Claude account) is done,
+    /// so the next login never races with it over the shared Claude Code files.
+    async fn stop(self) -> (AuthProvider, String) {
+        self.task.abort();
+        let _ = self.task.await;
+        (self.provider, self.profile)
+    }
+}
+
 pub struct Refresh;
 
 /// Internal: a login task ended.
 pub struct LoginFinished {
+    generation: u64,
     provider: AuthProvider,
     profile: String,
     result: Result<String, String>,
@@ -72,6 +92,7 @@ impl AccountsActor {
             self_addr,
             usage: None,
             login: None,
+            login_generation: 0,
             _owned_tasks: owned_tasks,
         }
     }
@@ -159,10 +180,12 @@ impl AccountsActor {
         }));
     }
 
-    fn start_login(&mut self, provider: AuthProvider, profile: String) {
-        if let Some((_, _, task)) = self.login.take() {
-            task.abort();
+    async fn start_login(&mut self, provider: AuthProvider, profile: String) {
+        if let Some(login) = self.login.take() {
+            login.stop().await;
         }
+        self.login_generation += 1;
+        let generation = self.login_generation;
         let mut addr = self.self_addr.clone();
         let task_profile = profile.clone();
         let task = tokio::spawn(async move {
@@ -173,13 +196,19 @@ impl AccountsActor {
             .map_err(|e| format!("{e:#}"));
             let _ = addr
                 .notify(LoginFinished {
+                    generation,
                     provider,
                     profile: task_profile,
                     result,
                 })
                 .await;
         });
-        self.login = Some((provider, profile, task));
+        self.login = Some(Login {
+            provider,
+            profile,
+            generation,
+            task,
+        });
     }
 }
 
@@ -219,7 +248,7 @@ impl Drop for RestoreClaudeLogin {
 
 async fn login_claude(profile: &str) -> anyhow::Result<String> {
     auth::profiles::validate(profile)?;
-    let mut restore = RestoreClaudeLogin(auth::claude_code::prepare_login()?);
+    let mut restore = RestoreClaudeLogin(auth::claude_code::prepare_login(profile)?);
     login_state(
         AuthProvider::Claude,
         profile,
@@ -352,15 +381,15 @@ impl Notifiable<UseLimitReset> for AccountsActor {
 #[async_trait]
 impl Notifiable<LoginRequest> for AccountsActor {
     async fn notify(&mut self, msg: LoginRequest, _: &Context<Self>) {
-        self.start_login(msg.provider, msg.profile);
+        self.start_login(msg.provider, msg.profile).await;
     }
 }
 
 #[async_trait]
 impl Notifiable<CancelLogin> for AccountsActor {
     async fn notify(&mut self, _: CancelLogin, _: &Context<Self>) {
-        if let Some((provider, profile, task)) = self.login.take() {
-            task.abort();
+        if let Some(login) = self.login.take() {
+            let (provider, profile) = login.stop().await;
             login_state(provider, &profile, LoginPhase::Cancelled, None, None);
         }
     }
@@ -369,7 +398,18 @@ impl Notifiable<CancelLogin> for AccountsActor {
 #[async_trait]
 impl Notifiable<LoginFinished> for AccountsActor {
     async fn notify(&mut self, msg: LoginFinished, _: &Context<Self>) {
+        // Sent just before its task was replaced or cancelled: that login no longer counts.
+        if self
+            .login
+            .as_ref()
+            .is_none_or(|l| l.generation != msg.generation)
+        {
+            return;
+        }
         self.login = None;
+        if msg.provider == AuthProvider::Claude {
+            sync_claude_settings();
+        }
         match msg.result {
             Ok(who) => {
                 login_state(
@@ -435,6 +475,9 @@ impl Notifiable<LogoutRequest> for AccountsActor {
             }
             AuthProvider::Claude => auth::claude_code::remove(&msg.profile),
         };
+        if msg.provider == AuthProvider::Claude {
+            sync_claude_settings();
+        }
         if let Err(e) = result {
             ErrorSignal::error(&e);
         }
@@ -452,6 +495,9 @@ impl Notifiable<ActivateAccount> for AccountsActor {
             )),
             AuthProvider::ChatGpt => auth::openai::activate(&msg.profile),
         };
+        if msg.provider == AuthProvider::Claude {
+            sync_claude_settings();
+        }
         match result {
             Ok(()) => ErrorSignal::send(
                 ErrorSeverity::Success,
@@ -465,6 +511,14 @@ impl Notifiable<ActivateAccount> for AccountsActor {
         }
         Self::send_state();
         self.refresh_usage();
+    }
+}
+
+/// The placeholder token in Claude Code's settings.json belongs there only without a login; fix it
+/// right away instead of on the next proxy poll, so a `claude` started meanwhile gets no 424.
+fn sync_claude_settings() {
+    if let Err(e) = claude_bridge_core::claude_settings::sync_auth(crate::configuration::port()) {
+        tracing::warn!("{e:#}");
     }
 }
 

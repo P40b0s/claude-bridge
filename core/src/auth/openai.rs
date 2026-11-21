@@ -316,6 +316,7 @@ pub async fn login_profile(
     on_url: impl FnOnce(&str),
 ) -> anyhow::Result<CodexTokens> {
     let profile = profiles::validate(profile)?.to_string();
+    profiles::ensure_distinct("chatgpt", &profile)?;
     let mut listeners = vec![
         TcpListener::bind(("127.0.0.1", CALLBACK_PORT))
             .await

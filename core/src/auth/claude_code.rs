@@ -112,18 +112,50 @@ fn current_snapshot() -> anyhow::Result<Snapshot> {
     })
 }
 
-fn write_object(path: &Path, value: Value) -> anyhow::Result<()> {
-    ensure!(value.is_object(), "{} is not a JSON object", path.display());
-    write_secret_json(path, &value)
+/// An existing Claude Code JSON file. A missing file is `None`; one that cannot be read or parsed
+/// is an error, so activation never replaces unrelated settings with an empty object.
+/// A file's original bytes, to restore it, and its parsed object.
+type Existing = (Vec<u8>, Map<String, Value>);
+
+fn read_existing(path: &Path) -> anyhow::Result<Option<Existing>> {
+    let data = match std::fs::read(path) {
+        Ok(data) => data,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+    };
+    let value: Value = serde_json::from_slice(&data)
+        .with_context(|| format!("{} is not valid JSON; fix or remove it", path.display()))?;
+    let Value::Object(map) = value else {
+        bail!("{} is not a JSON object", path.display());
+    };
+    Ok(Some((data, map)))
+}
+
+/// Puts back what a file held before a failed activation.
+fn restore(path: &Path, original: Option<Vec<u8>>) -> anyhow::Result<()> {
+    match original {
+        Some(data) => {
+            let value: Value = serde_json::from_slice(&data)?;
+            write_secret_json(path, &value)
+        }
+        None => {
+            remove_file(path);
+            Ok(())
+        }
+    }
 }
 
 fn apply(snapshot: &Snapshot) -> anyhow::Result<()> {
+    ensure!(
+        snapshot.claude_ai_oauth.is_object() && snapshot.oauth_account.is_object(),
+        "the saved Claude account is damaged"
+    );
+    // Both documents are prepared before either is written.
     let credentials_path = credentials_file();
-    let mut credentials =
-        read_json::<Value>(&credentials_path).unwrap_or_else(|| Value::Object(Map::new()));
-    let credentials = credentials
-        .as_object_mut()
-        .context("Claude Code credentials are not a JSON object")?;
+    let (credentials_original, mut credentials) = match read_existing(&credentials_path)? {
+        Some((data, map)) => (Some(data), map),
+        None => (None, Map::new()),
+    };
     credentials.insert("claudeAiOauth".into(), snapshot.claude_ai_oauth.clone());
     match &snapshot.organization_uuid {
         Some(value) => {
@@ -133,15 +165,82 @@ fn apply(snapshot: &Snapshot) -> anyhow::Result<()> {
             credentials.remove("organizationUuid");
         }
     }
-    write_object(&credentials_path, Value::Object(credentials.clone()))?;
 
     let config_path = config_file();
-    let mut root = read_json::<Value>(&config_path).unwrap_or_else(|| Value::Object(Map::new()));
-    let root = root
-        .as_object_mut()
-        .context("Claude Code configuration is not a JSON object")?;
+    let mut root = read_existing(&config_path)?
+        .map(|(_, map)| map)
+        .unwrap_or_default();
     root.insert("oauthAccount".into(), snapshot.oauth_account.clone());
-    write_object(&config_path, Value::Object(root.clone()))
+
+    write_secret_json(&credentials_path, &Value::Object(credentials))?;
+    if let Err(e) = write_secret_json(&config_path, &Value::Object(root)) {
+        // Credentials of one account with metadata of another would be worse than either.
+        if let Err(restore_error) = restore(&credentials_path, credentials_original) {
+            return Err(e.context(format!(
+                "restoring {} also failed: {restore_error:#}",
+                credentials_path.display()
+            )));
+        }
+        return Err(e);
+    }
+    Ok(())
+}
+
+/// Which account and organization a login belongs to, when Claude Code recorded it.
+fn identity(oauth_account: &Value) -> Option<(Option<&str>, Option<&str>)> {
+    let field = |name| {
+        oauth_account
+            .get(name)
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+    };
+    let account = field("accountUuid").or_else(|| field("emailAddress"));
+    let organization = field("organizationUuid");
+    (account.is_some() || organization.is_some()).then_some((account, organization))
+}
+
+/// Saves the shared profile's login under `profile`, unless that profile holds a different
+/// account: then the login was changed outside the bridge (`claude auth login`, `/login`), and it
+/// is saved under a new name instead of overwriting the other account.
+fn save_current_checked(profile: &str) -> anyhow::Result<String> {
+    let current = current_snapshot()?;
+    let path = snapshot_file(profile)?;
+    let saved = read_json::<Snapshot>(&path);
+    let same = match (&saved, identity(&current.oauth_account)) {
+        (Some(saved), Some(now)) => identity(&saved.oauth_account).is_none_or(|was| was == now),
+        _ => true,
+    };
+    if same {
+        write_secret_json(&path, &current)?;
+        return Ok(profile.to_string());
+    }
+    let base = current
+        .oauth_account
+        .get("emailAddress")
+        .and_then(Value::as_str)
+        .and_then(|email| email.split('@').next())
+        .map(|name| {
+            name.chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .take(48)
+                .collect::<String>()
+        })
+        .filter(|name| profiles::validate(name).is_ok())
+        .unwrap_or_else(|| "account".into());
+    let existing: Vec<String> = saved_profile_ids();
+    let taken = |id: &str| existing.iter().any(|e| e.eq_ignore_ascii_case(id));
+    let id = std::iter::once(base.clone())
+        .chain((2..).map(|n| format!("{base}-{n}")))
+        .find(|id| !taken(id))
+        .expect("an unused profile name");
+    write_secret_json(&snapshot_file(&id)?, &current)?;
+    Ok(id)
 }
 
 /// The account currently installed in the shared Claude Code profile.
@@ -162,12 +261,16 @@ pub fn save_current(profile: &str) -> anyhow::Result<()> {
 
 /// Makes a saved account current while leaving all non-account Claude Code state untouched.
 pub fn activate(profile: &str) -> anyhow::Result<()> {
+    activate_with(profile, true)
+}
+
+fn activate_with(profile: &str, save_previous: bool) -> anyhow::Result<()> {
     let profile = profiles::validate(profile)?;
     let target: Snapshot = read_json(&snapshot_file(profile)?)
         .with_context(|| format!("Claude account '{profile}' is not saved"))?;
     let current = active_profile();
-    if account().is_some() && current != profile {
-        save_current(&current)?;
+    if save_previous && account().is_some() && current != profile {
+        save_current_checked(&current)?;
     }
     apply(&target)?;
     profiles::set_active(profiles::CLAUDE_ACTIVE_KEY, Some(profile))
@@ -180,12 +283,12 @@ pub fn finish_login(profile: &str) -> anyhow::Result<()> {
     profiles::set_active(profiles::CLAUDE_ACTIVE_KEY, Some(profile))
 }
 
-/// Saves the current account before `claude auth login` changes it.
-pub fn prepare_login() -> anyhow::Result<Option<String>> {
-    let previous = active_profile();
+/// Saves the current account before `claude auth login` changes it. Returns the profile to
+/// restore if the login fails.
+pub fn prepare_login(profile: &str) -> anyhow::Result<Option<String>> {
+    profiles::ensure_distinct("claude", profile)?;
     if account().is_some() {
-        save_current(&previous)?;
-        Ok(Some(previous))
+        Ok(Some(save_current_checked(&active_profile())?))
     } else {
         Ok(None)
     }
@@ -193,7 +296,8 @@ pub fn prepare_login() -> anyhow::Result<Option<String>> {
 
 pub fn restore_after_failed_login(previous: Option<&str>) -> anyhow::Result<()> {
     match previous {
-        Some(profile) => activate(profile),
+        // `prepare_login` already saved it; what the failed login left is not worth keeping.
+        Some(profile) => activate_with(profile, false),
         None => Ok(()),
     }
 }
@@ -250,7 +354,8 @@ pub fn clear_active(profile: &str) -> anyhow::Result<()> {
     remove(profile)?;
     let next = saved_profile_ids().into_iter().find(|id| id != profile);
     if let Some(next) = next {
-        activate(&next)?;
+        // Whatever `claude auth logout` left behind is not an account to save.
+        activate_with(&next, false)?;
     }
     Ok(())
 }
@@ -274,8 +379,17 @@ fn saved_profile_ids() -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::account_from;
+    use super::{account_from, identity};
     use serde_json::json;
+
+    #[test]
+    fn identity_tells_accounts_apart() {
+        let a = json!({"accountUuid": "a", "organizationUuid": "o", "emailAddress": "a@x"});
+        let b = json!({"accountUuid": "b", "organizationUuid": "o"});
+        assert_eq!(identity(&a), Some((Some("a"), Some("o"))));
+        assert_ne!(identity(&a), identity(&b));
+        assert_eq!(identity(&json!({})), None);
+    }
 
     #[test]
     fn account_allows_missing_optional_fields() {

@@ -48,9 +48,44 @@ pub fn dir(provider: &str) -> PathBuf {
     config::data_dir().join("accounts").join(provider)
 }
 
+/// Rejects a profile name that differs only in case from an existing one of `provider`. On
+/// case-insensitive filesystems (Windows, default macOS) both would share one file and one
+/// browser profile.
+pub fn ensure_distinct(provider: &str, name: &str) -> anyhow::Result<()> {
+    let name = validate(name)?;
+    let Ok(entries) = std::fs::read_dir(dir(provider)) else {
+        return Ok(());
+    };
+    let existing = entries.flatten().filter_map(|entry| {
+        let path = entry.path();
+        (path.extension().and_then(|e| e.to_str()) == Some("json"))
+            .then(|| path.file_stem()?.to_str().map(String::from))
+            .flatten()
+    });
+    check_distinct(name, existing.chain([DEFAULT_PROFILE.to_string()]))
+}
+
+fn check_distinct(name: &str, existing: impl IntoIterator<Item = String>) -> anyhow::Result<()> {
+    for other in existing {
+        if other != name && other.eq_ignore_ascii_case(name) {
+            bail!("account '{other}' already exists; names differing only in case are not allowed");
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::validate;
+    use super::{check_distinct, validate};
+
+    #[test]
+    fn case_only_differences_are_rejected() {
+        let existing = || ["default".to_string(), "work".to_string()];
+        assert!(check_distinct("work", existing()).is_ok());
+        assert!(check_distinct("other", existing()).is_ok());
+        assert!(check_distinct("Work", existing()).is_err());
+        assert!(check_distinct("DEFAULT", existing()).is_err());
+    }
 
     #[test]
     fn profile_names_are_safe_file_names() {
