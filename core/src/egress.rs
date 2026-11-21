@@ -22,33 +22,53 @@ use crate::exits::{Exit, Exits};
 use crate::{config, dns, geo, server, settings};
 
 pub const PORT_KEY: &str = "CLAUDE_BRIDGE_EGRESS_PORT";
-/// Provider family whose exit and countries this traffic follows.
-const FAMILY: &str = "anthropic";
+/// Claude Code's general traffic follows Anthropic. Browser logins also get a dedicated Codex
+/// port, so the page and the token exchange leave through the same provider exit.
+const DEFAULT_FAMILY: &str = "anthropic";
+const BROWSER_FAMILIES: &[&str] = &["anthropic", "codex"];
 const MAX_HEAD: usize = 32 * 1024;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// Tools Claude Code runs (npm, git) open many connections; one passed check covers this long.
 /// A failed check is never reused, and model calls are checked every time regardless.
 const CHECK_REUSE: Duration = Duration::from_secs(15);
 
-/// Exit spec and when its country check last passed.
-static PASSED: std::sync::Mutex<Option<(String, std::time::Instant)>> = std::sync::Mutex::new(None);
+/// Family + exit spec and when its country check last passed.
+static PASSED: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
-async fn check_country(exit: &Exit, client: &reqwest::Client) -> Result<(), crate::error::ProxyError> {
-    let spec = exit.spec();
-    let fresh = PASSED.lock().unwrap().as_ref().is_some_and(|(s, at)| *s == spec && at.elapsed() < CHECK_REUSE);
+async fn check_country(
+    family: &str,
+    exit: &Exit,
+    client: &reqwest::Client,
+) -> Result<(), crate::error::ProxyError> {
+    let key = format!("{family}:{}", exit.spec());
+    let fresh = PASSED
+        .lock()
+        .unwrap()
+        .get(&key)
+        .is_some_and(|at| at.elapsed() < CHECK_REUSE);
     if fresh {
         return Ok(());
     }
-    if let Some(location) = geo::check(client, FAMILY, &server::family_origin(FAMILY)).await? {
+    if let Some(location) = geo::check(client, family, &server::family_origin(family)).await?
+        && family == DEFAULT_FAMILY
+    {
         crate::zone::remember(&location);
     }
-    *PASSED.lock().unwrap() = Some((spec, std::time::Instant::now()));
+    PASSED
+        .lock()
+        .unwrap()
+        .insert(key, std::time::Instant::now());
     Ok(())
 }
 
 /// The port, or None when turned off.
 pub fn port() -> Option<u16> {
-    let value = settings::read().remove(PORT_KEY).filter(|v| !v.trim().is_empty()).or_else(|| config::env(PORT_KEY));
+    let value = settings::read()
+        .remove(PORT_KEY)
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| config::env(PORT_KEY));
     match value.map(|v| v.trim().parse::<u16>()) {
         Some(Ok(0)) => None,
         Some(Ok(port)) => Some(port),
@@ -56,24 +76,56 @@ pub fn port() -> Option<u16> {
     }
 }
 
-/// `http://127.0.0.1:<port>`, what Claude Code gets as its proxy.
+/// Port for a family. Anthropic is the configured egress port; Codex is the next port.
+pub fn family_port(family: &str) -> Option<u16> {
+    let base = port()?;
+    match family {
+        DEFAULT_FAMILY => Some(base),
+        "codex" => base.checked_add(1),
+        _ => None,
+    }
+}
+
+/// `http://127.0.0.1:<port>`, what Claude Code gets as its general Anthropic egress proxy.
 pub fn url() -> Option<String> {
-    port().map(|p| format!("http://127.0.0.1:{p}"))
+    family_url(DEFAULT_FAMILY)
+}
+
+/// Browser proxy for `family`, through that family's selected exit and country check.
+pub fn family_url(family: &str) -> Option<String> {
+    family_port(family).map(|p| format!("http://127.0.0.1:{p}"))
 }
 
 pub async fn serve(state: Arc<server::AppState>) {
-    let Some(port) = port() else { return };
+    let mut tasks = tokio::task::JoinSet::new();
+    for &family in BROWSER_FAMILIES {
+        let Some(port) = family_port(family) else {
+            continue;
+        };
+        let state = state.clone();
+        tasks.spawn(async move { serve_family(state, family, port).await });
+    }
+    while let Some(result) = tasks.join_next().await {
+        if let Err(e) = result {
+            warn!("egress proxy task stopped: {e}");
+        }
+    }
+}
+
+async fn serve_family(state: Arc<server::AppState>, family: &'static str, port: u16) {
     let listener = match TcpListener::bind(("127.0.0.1", port)).await {
         Ok(l) => l,
-        Err(e) => return warn!("egress proxy: cannot listen on 127.0.0.1:{port}: {e}"),
+        Err(e) => return warn!("{family} egress proxy: cannot listen on 127.0.0.1:{port}: {e}"),
     };
-    info!("egress proxy for Claude Code on http://127.0.0.1:{port}");
+    info!("{family} egress proxy on http://127.0.0.1:{port}");
     loop {
-        let Ok((client, _)) = listener.accept().await else { continue };
+        let Ok((client, _)) = listener.accept().await else {
+            continue;
+        };
         let state = state.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle(client, &state).await {
-                debug!("egress: {e:#}");
+            if let Err(e) = handle(client, &state, family).await {
+                debug!("{family} egress: {e:#}");
             }
         });
     }
@@ -107,23 +159,45 @@ async fn read_head(client: &mut TcpStream) -> anyhow::Result<Head> {
     let head = String::from_utf8_lossy(&buf[..head_len]).to_string();
     let line = head.lines().next().unwrap_or_default();
     let mut parts = line.split_whitespace();
-    let (method, target) = (parts.next().unwrap_or_default(), parts.next().unwrap_or_default());
+    let (method, target) = (
+        parts.next().unwrap_or_default(),
+        parts.next().unwrap_or_default(),
+    );
     let (connect, host, port) = if method.eq_ignore_ascii_case("CONNECT") {
         let (host, port) = split_host_port(target, 443)?;
         (true, host, port)
     } else {
-        let url = url::Url::parse(target).with_context(|| format!("not a proxy request: {line}"))?;
-        anyhow::ensure!(url.scheme() == "http", "only http:// can be forwarded as-is; https goes through CONNECT");
-        let host = url.host_str().context("no host")?.trim_start_matches('[').trim_end_matches(']').to_string();
+        let url =
+            url::Url::parse(target).with_context(|| format!("not a proxy request: {line}"))?;
+        anyhow::ensure!(
+            url.scheme() == "http",
+            "only http:// can be forwarded as-is; https goes through CONNECT"
+        );
+        let host = url
+            .host_str()
+            .context("no host")?
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .to_string();
         (false, host, url.port().unwrap_or(80))
     };
-    Ok(Head { buf, head_len, connect, host, port })
+    Ok(Head {
+        buf,
+        head_len,
+        connect,
+        host,
+        port,
+    })
 }
 
 fn split_host_port(target: &str, default: u16) -> anyhow::Result<(String, u16)> {
     if let Some(rest) = target.strip_prefix('[') {
         let (host, after) = rest.split_once(']').context("bad IPv6 target")?;
-        let port = after.strip_prefix(':').map(str::parse).transpose()?.unwrap_or(default);
+        let port = after
+            .strip_prefix(':')
+            .map(str::parse)
+            .transpose()?
+            .unwrap_or(default);
         return Ok((host.to_string(), port));
     }
     match target.rsplit_once(':') {
@@ -142,42 +216,78 @@ async fn refuse(client: &mut TcpStream, status: &str, message: &str) {
 }
 
 /// A refusal shows in the request log (and so as a warning in the UI), like a refused model call.
-async fn refused(state: &server::AppState, client: &mut TcpStream, head: &Head, e: crate::error::ProxyError) {
+async fn refused(
+    state: &server::AppState,
+    client: &mut TcpStream,
+    head: &Head,
+    e: crate::error::ProxyError,
+) {
     warn!(target_host = %head.host, "egress refused: {}", e.message);
-    let status = format!("{} {}", e.status.as_u16(), e.status.canonical_reason().unwrap_or(""));
+    let status = format!(
+        "{} {}",
+        e.status.as_u16(),
+        e.status.canonical_reason().unwrap_or("")
+    );
     refuse(client, &status, &e.message).await;
-    let tracker = state.log.begin(&format!("Claude Code → {}:{}", head.host, head.port), false);
+    let tracker = state
+        .log
+        .begin(&format!("Claude Code → {}:{}", head.host, head.port), false);
     state.log.publish(tracker.failed(&e));
 }
 
-async fn handle(mut client: TcpStream, state: &server::AppState) -> anyhow::Result<()> {
+async fn handle(
+    mut client: TcpStream,
+    state: &server::AppState,
+    family: &str,
+) -> anyhow::Result<()> {
     let exits: &Exits = &state.exits;
     let head = read_head(&mut client).await?;
-    let (exit, exit_client) = match exits.for_family(FAMILY).await {
+    let (exit, exit_client) = match exits.for_family(family).await {
         Ok(found) => found,
-        Err(e) => return Ok(refused(state, &mut client, &head, e).await),
+        Err(e) => {
+            refused(state, &mut client, &head, e).await;
+            return Ok(());
+        }
     };
     // The same check as for model calls, through the same exit.
-    if let Err(e) = check_country(&exit, &exit_client).await {
-        return Ok(refused(state, &mut client, &head, e).await);
+    if let Err(e) = check_country(family, &exit, &exit_client).await {
+        refused(state, &mut client, &head, e).await;
+        return Ok(());
     }
-    let mut upstream = match tokio::time::timeout(CONNECT_TIMEOUT, open(exits, &exit, &head.host, head.port)).await {
+    let mut upstream = match tokio::time::timeout(
+        CONNECT_TIMEOUT,
+        open(exits, &exit, &head.host, head.port),
+    )
+    .await
+    {
         Ok(Ok(stream)) => stream,
         Ok(Err(e)) => {
-            let message = format!("cannot reach {}:{} through {}: {e:#}", head.host, head.port, exit.label());
+            let message = format!(
+                "cannot reach {}:{} through {}: {e:#}",
+                head.host,
+                head.port,
+                exit.label()
+            );
             warn!("egress: {message}");
             refuse(&mut client, "502 Bad Gateway", &message).await;
             return Ok(());
         }
         Err(_) => {
-            let message = format!("{}:{} through {} timed out", head.host, head.port, exit.label());
+            let message = format!(
+                "{}:{} through {} timed out",
+                head.host,
+                head.port,
+                exit.label()
+            );
             refuse(&mut client, "504 Gateway Timeout", &message).await;
             return Ok(());
         }
     };
     debug!(host = %head.host, port = head.port, exit = %exit.label(), "egress");
     if head.connect {
-        client.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n").await?;
+        client
+            .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+            .await?;
         upstream.write_all(&head.buf[head.head_len..]).await?;
     } else {
         // HTTP/1.1 servers accept the absolute form, so the request goes on unchanged.
@@ -199,17 +309,26 @@ pub async fn open(exits: &Exits, exit: &Exit, host: &str, port: u16) -> anyhow::
         }
         Exit::Proxy(spec) => {
             let url = url::Url::parse(spec)?;
-            let proxy_host = url.host_str().context("proxy has no host")?.trim_start_matches('[').trim_end_matches(']');
+            let proxy_host = url
+                .host_str()
+                .context("proxy has no host")?
+                .trim_start_matches('[')
+                .trim_end_matches(']');
             let proxy_port = url.port_or_known_default().unwrap_or(1080);
             let stream = connect_direct(proxy_host, proxy_port).await?;
             let user = (!url.username().is_empty()).then(|| {
                 let decode = |s: &str| percent_decode(s);
-                (decode(url.username()), decode(url.password().unwrap_or_default()))
+                (
+                    decode(url.username()),
+                    decode(url.password().unwrap_or_default()),
+                )
             });
             match url.scheme() {
                 "socks5" | "socks5h" => socks5(stream, host, port, user).await,
                 "http" => http_connect(stream, host, port, user).await,
-                other => bail!("{other}:// proxies cannot carry Claude Code's other traffic; use socks5 or http"),
+                other => bail!(
+                    "{other}:// proxies cannot carry Claude Code's other traffic; use socks5 or http"
+                ),
             }
         }
     }
@@ -240,11 +359,20 @@ async fn resolve(host: &str, port: u16) -> anyhow::Result<Vec<SocketAddr>> {
     let ips: Vec<IpAddr> = if dns::doh_enabled() {
         dns::Doh::global().lookup(host).await?
     } else {
-        tokio::net::lookup_host((host, port)).await?.map(|a| a.ip()).collect()
+        tokio::net::lookup_host((host, port))
+            .await?
+            .map(|a| a.ip())
+            .collect()
     };
-    let ips: Vec<IpAddr> = ips.into_iter().filter(|ip| ip.is_ipv4() || dns::ipv6_enabled()).collect();
+    let ips: Vec<IpAddr> = ips
+        .into_iter()
+        .filter(|ip| ip.is_ipv4() || dns::ipv6_enabled())
+        .collect();
     anyhow::ensure!(!ips.is_empty(), "{host} has no usable address");
-    Ok(ips.into_iter().map(|ip| SocketAddr::new(ip, port)).collect())
+    Ok(ips
+        .into_iter()
+        .map(|ip| SocketAddr::new(ip, port))
+        .collect())
 }
 
 async fn connect_direct(host: &str, port: u16) -> anyhow::Result<TcpStream> {
@@ -255,18 +383,31 @@ async fn connect_direct(host: &str, port: u16) -> anyhow::Result<TcpStream> {
             Err(e) => last = Some(e),
         }
     }
-    Err(last.map(anyhow::Error::from).unwrap_or_else(|| anyhow::anyhow!("no address")))
+    Err(last
+        .map(anyhow::Error::from)
+        .unwrap_or_else(|| anyhow::anyhow!("no address")))
 }
 
 /// SOCKS5 `CONNECT` by name (the far side resolves it), with optional user/password.
-async fn socks5(mut s: TcpStream, host: &str, port: u16, auth: Option<(String, String)>) -> anyhow::Result<TcpStream> {
+async fn socks5(
+    mut s: TcpStream,
+    host: &str,
+    port: u16,
+    auth: Option<(String, String)>,
+) -> anyhow::Result<TcpStream> {
     let method = if auth.is_some() { 0x02 } else { 0x00 };
     s.write_all(&[0x05, 0x01, method]).await?;
     let mut reply = [0u8; 2];
     s.read_exact(&mut reply).await?;
-    anyhow::ensure!(reply[0] == 0x05 && reply[1] == method, "SOCKS proxy refused the login method");
+    anyhow::ensure!(
+        reply[0] == 0x05 && reply[1] == method,
+        "SOCKS proxy refused the login method"
+    );
     if let Some((user, pass)) = auth {
-        anyhow::ensure!(user.len() < 256 && pass.len() < 256, "SOCKS credentials too long");
+        anyhow::ensure!(
+            user.len() < 256 && pass.len() < 256,
+            "SOCKS credentials too long"
+        );
         let mut msg = vec![0x01, user.len() as u8];
         msg.extend_from_slice(user.as_bytes());
         msg.push(pass.len() as u8);
@@ -296,7 +437,11 @@ async fn socks5(mut s: TcpStream, host: &str, port: u16, auth: Option<(String, S
     s.write_all(&msg).await?;
     let mut head = [0u8; 4];
     s.read_exact(&mut head).await?;
-    anyhow::ensure!(head[1] == 0x00, "SOCKS connect to {host}:{port} failed (code {})", head[1]);
+    anyhow::ensure!(
+        head[1] == 0x00,
+        "SOCKS connect to {host}:{port} failed (code {})",
+        head[1]
+    );
     let skip = match head[3] {
         0x01 => 4,
         0x04 => 16,
@@ -312,8 +457,17 @@ async fn socks5(mut s: TcpStream, host: &str, port: u16, auth: Option<(String, S
     Ok(s)
 }
 
-async fn http_connect(mut s: TcpStream, host: &str, port: u16, auth: Option<(String, String)>) -> anyhow::Result<TcpStream> {
-    let target = if host.contains(':') { format!("[{host}]:{port}") } else { format!("{host}:{port}") };
+async fn http_connect(
+    mut s: TcpStream,
+    host: &str,
+    port: u16,
+    auth: Option<(String, String)>,
+) -> anyhow::Result<TcpStream> {
+    let target = if host.contains(':') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    };
     let mut req = format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n");
     if let Some((user, pass)) = auth {
         let token = base64::engine::general_purpose::STANDARD.encode(format!("{user}:{pass}"));
@@ -329,8 +483,15 @@ async fn http_connect(mut s: TcpStream, host: &str, port: u16, auth: Option<(Str
         s.read_exact(&mut byte).await?;
         head.push(byte[0]);
     }
-    let status = String::from_utf8_lossy(&head).lines().next().unwrap_or_default().to_string();
-    anyhow::ensure!(status.split_whitespace().nth(1) == Some("200"), "proxy answered {status}");
+    let status = String::from_utf8_lossy(&head)
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .to_string();
+    anyhow::ensure!(
+        status.split_whitespace().nth(1) == Some("200"),
+        "proxy answered {status}"
+    );
     Ok(s)
 }
 
@@ -340,9 +501,18 @@ mod tests {
 
     #[test]
     fn splits_connect_targets() {
-        assert_eq!(split_host_port("api.anthropic.com:443", 443).unwrap(), ("api.anthropic.com".into(), 443));
-        assert_eq!(split_host_port("[2606:4700::1]:8443", 443).unwrap(), ("2606:4700::1".into(), 8443));
-        assert_eq!(split_host_port("example.com", 443).unwrap(), ("example.com".into(), 443));
+        assert_eq!(
+            split_host_port("api.anthropic.com:443", 443).unwrap(),
+            ("api.anthropic.com".into(), 443)
+        );
+        assert_eq!(
+            split_host_port("[2606:4700::1]:8443", 443).unwrap(),
+            ("2606:4700::1".into(), 8443)
+        );
+        assert_eq!(
+            split_host_port("example.com", 443).unwrap(),
+            ("example.com".into(), 443)
+        );
     }
 
     #[tokio::test]
@@ -364,10 +534,19 @@ mod tests {
             assert_eq!(&req[..5], &[5, 1, 0, 3, 17]);
             assert_eq!(&req[5..22], b"api.anthropic.com");
             assert_eq!(&req[22..], &443u16.to_be_bytes());
-            s.write_all(&[5, 0, 0, 1, 10, 0, 0, 1, 0, 80, b'o', b'k']).await.unwrap();
+            s.write_all(&[5, 0, 0, 1, 10, 0, 0, 1, 0, 80, b'o', b'k'])
+                .await
+                .unwrap();
         });
         let stream = TcpStream::connect(addr).await.unwrap();
-        let mut s = socks5(stream, "api.anthropic.com", 443, Some(("u".into(), "pw".into()))).await.unwrap();
+        let mut s = socks5(
+            stream,
+            "api.anthropic.com",
+            443,
+            Some(("u".into(), "pw".into())),
+        )
+        .await
+        .unwrap();
         let mut tail = [0u8; 2];
         s.read_exact(&mut tail).await.unwrap();
         assert_eq!(&tail, b"ok", "bytes after the reply belong to the tunnel");
@@ -383,12 +562,20 @@ mod tests {
             let mut buf = vec![0u8; 4096];
             let n = s.read(&mut buf).await.unwrap();
             let req = String::from_utf8_lossy(&buf[..n]).to_string();
-            assert!(req.starts_with("CONNECT chatgpt.com:443 HTTP/1.1\r\n"), "{req}");
-            assert!(req.contains("Proxy-Authorization: Basic dTpwdw==\r\n"), "{req}");
+            assert!(
+                req.starts_with("CONNECT chatgpt.com:443 HTTP/1.1\r\n"),
+                "{req}"
+            );
+            assert!(
+                req.contains("Proxy-Authorization: Basic dTpwdw==\r\n"),
+                "{req}"
+            );
             s.write_all(b"HTTP/1.1 200 OK\r\n\r\nTLS").await.unwrap();
         });
         let stream = TcpStream::connect(addr).await.unwrap();
-        let mut s = http_connect(stream, "chatgpt.com", 443, Some(("u".into(), "pw".into()))).await.unwrap();
+        let mut s = http_connect(stream, "chatgpt.com", 443, Some(("u".into(), "pw".into())))
+            .await
+            .unwrap();
         let mut tail = [0u8; 3];
         s.read_exact(&mut tail).await.unwrap();
         assert_eq!(&tail, b"TLS");

@@ -7,8 +7,8 @@ use std::process::Command;
 
 use anyhow::{Context, bail};
 
-use crate::providers::anthropic::PLACEHOLDER_TOKEN;
 use crate::auth::claude_code;
+use crate::providers::anthropic::PLACEHOLDER_TOKEN;
 use crate::{config, control, settings};
 
 pub struct ContextWindow {
@@ -25,14 +25,28 @@ const CODEX_WINDOW: u64 = 372_000;
 pub const CODEX_COMPACT_AT: u64 = 200_000;
 
 /// The window `claude-bridge codex` reports, from `CODEX_CONTEXT_WINDOW_TOKENS`,
-/// `CODEX_AUTO_COMPACT_WINDOW_TOKENS` and `CODEX_DISABLE_COMPACT`.
+/// `CODEX_AUTO_COMPACT_WINDOW_TOKENS` and `CODEX_DISABLE_COMPACT`: the .env file first (the UI
+/// edits it while running and syncs settings.json from it), then the process environment.
 pub fn codex_context() -> ContextWindow {
-    let num = |name: &str| config::env(name).and_then(|v| v.parse::<u64>().ok()).filter(|&v| v > 0);
+    let file = settings::read();
+    let get = |name: &str| {
+        file.get(name)
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+            .or_else(|| config::env(name))
+    };
+    let num = |name: &str| {
+        get(name)
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .filter(|&v| v > 0)
+    };
     let tokens = num("CODEX_CONTEXT_WINDOW_TOKENS").unwrap_or(CODEX_WINDOW);
     ContextWindow {
         tokens,
-        auto_compact_at: num("CODEX_AUTO_COMPACT_WINDOW_TOKENS").unwrap_or(CODEX_COMPACT_AT).min(tokens),
-        disable_compact: config::env("CODEX_DISABLE_COMPACT").as_deref() == Some("1"),
+        auto_compact_at: num("CODEX_AUTO_COMPACT_WINDOW_TOKENS")
+            .unwrap_or(CODEX_COMPACT_AT)
+            .min(tokens),
+        disable_compact: get("CODEX_DISABLE_COMPACT").as_deref() == Some("1"),
     }
 }
 
@@ -50,7 +64,11 @@ pub struct Launch {
 pub fn format_tokens(tokens: u64) -> String {
     if tokens >= 1_000_000 {
         let m = tokens as f64 / 1_000_000.0;
-        if m.fract() == 0.0 { format!("{m:.0}M") } else { format!("{m:.1}M") }
+        if m.fract() == 0.0 {
+            format!("{m:.0}M")
+        } else {
+            format!("{m:.1}M")
+        }
     } else if tokens >= 1_000 {
         format!("{}k", (tokens as f64 / 1_000.0).round())
     } else {
@@ -68,24 +86,46 @@ fn set_default_env(cmd: &mut Command, name: &str, value: &str) {
 pub async fn launch(launch: Launch) -> anyhow::Result<()> {
     let port = config::port();
     let was_running = control::health(port).await.is_some();
-    let health = control::ensure_proxy(&std::env::current_exe()?, port, &launch.proxy_default, launch.restart).await?;
+    let health = control::ensure_proxy(
+        &std::env::current_exe()?,
+        port,
+        &launch.proxy_default,
+        launch.restart,
+    )
+    .await?;
     let model = |t: &Option<crate::routing::Target>| {
-        t.as_ref().map(|t| format!("{}:{}", t.provider.as_str(), t.model)).unwrap_or_else(|| "-".into())
+        t.as_ref()
+            .map(|t| format!("{}:{}", t.provider.as_str(), t.model))
+            .unwrap_or_else(|| "-".into())
     };
     if was_running && !launch.restart {
-        eprintln!("  Proxy already running (PID {}, {})", health.pid, model(&health.active));
+        eprintln!(
+            "  Proxy already running (PID {}, {})",
+            health.pid,
+            model(&health.active)
+        );
     } else {
-        eprintln!("  Proxy started on {} (log: {})", control::base_url(port), control::log_path().display());
+        eprintln!(
+            "  Proxy started on {} (log: {})",
+            control::base_url(port),
+            control::log_path().display()
+        );
     }
     if health.pinned.is_some() {
-        eprintln!("  Model pinned to {} (claude-bridge model --clear to follow /model)", model(&health.pinned));
+        eprintln!(
+            "  Model pinned to {} (claude-bridge model --clear to follow /model)",
+            model(&health.pinned)
+        );
     }
 
     // `CLAUDE_BRIDGE_TZ=auto`: the zone of the exit's country as it is now, not as last seen.
     if crate::claude_settings::time_zone_setting().is_some_and(|v| v.eq_ignore_ascii_case("auto")) {
         match crate::zone::locate_outside().await {
             Ok(location) => crate::zone::remember(&location),
-            Err(e) => eprintln!("  Warning: exit country unknown, time zone {}: {e:#}", crate::zone::auto()),
+            Err(e) => eprintln!(
+                "  Warning: exit country unknown, time zone {}: {e:#}",
+                crate::zone::auto()
+            ),
         }
     }
     // settings.json's env applies to this claude too, so its placeholder token must match the login.
@@ -99,34 +139,56 @@ pub async fn launch(launch: Launch) -> anyhow::Result<()> {
     if launch.skip_permissions {
         cmd.arg("--dangerously-skip-permissions");
     }
-    cmd.args(&launch.claude_args).env("ANTHROPIC_BASE_URL", control::base_url(port));
+    cmd.args(&launch.claude_args)
+        .env("ANTHROPIC_BASE_URL", control::base_url(port));
     // Claude Code keeps its own login, so Claude models (`/model opus`) reach Claude with it.
     // Without one it gets a placeholder token, and Claude models use ANTHROPIC_API_KEY.
     match claude_code::account() {
         Some(account) => {
             // The proxy's key from .env would take over Claude Code's login; one the user exported stays.
-            if settings::read().get("ANTHROPIC_API_KEY").is_some_and(|k| config::env("ANTHROPIC_API_KEY").as_ref() == Some(k)) {
+            if settings::read()
+                .get("ANTHROPIC_API_KEY")
+                .is_some_and(|k| config::env("ANTHROPIC_API_KEY").as_ref() == Some(k))
+            {
                 cmd.env_remove("ANTHROPIC_API_KEY");
             }
-            eprintln!("  Claude: Claude Code login ({})", account.email.as_deref().unwrap_or("unknown account"));
+            eprintln!(
+                "  Claude: Claude Code login ({})",
+                account.email.as_deref().unwrap_or("unknown account")
+            );
         }
         None => set_default_env(&mut cmd, "ANTHROPIC_AUTH_TOKEN", PLACEHOLDER_TOKEN),
     }
     // `/model opus` is then an explicit pick of Claude rather than a bare claude-* name, which the
     // proxy treats as an internal call. Sonnet and haiku stay bare: Claude Code uses them internally.
-    set_default_env(&mut cmd, "ANTHROPIC_DEFAULT_OPUS_MODEL", "anthropic:claude-opus-5-5");
+    set_default_env(
+        &mut cmd,
+        "ANTHROPIC_DEFAULT_OPUS_MODEL",
+        "anthropic:claude-opus-5-5",
+    );
 
     // No telemetry, and Claude Code's other traffic through the egress proxy (see `claude_settings`).
     for (key, value) in crate::claude_settings::managed_env() {
-        if key != "CLAUDE_CODE_AUTO_COMPACT_WINDOW" {
+        if !matches!(
+            key,
+            "CLAUDE_CODE_AUTO_COMPACT_WINDOW" | "CLAUDE_CODE_MAX_CONTEXT_TOKENS"
+        ) {
             set_default_env(&mut cmd, key, &value);
         }
     }
 
     // Tell Claude Code the provider's real window so it compacts before the upstream rejects.
     if let Some(ctx) = &launch.context {
-        set_default_env(&mut cmd, "CLAUDE_CODE_MAX_CONTEXT_TOKENS", &ctx.tokens.to_string());
-        set_default_env(&mut cmd, "CLAUDE_CODE_AUTO_COMPACT_WINDOW", &ctx.auto_compact_at.to_string());
+        set_default_env(
+            &mut cmd,
+            "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
+            &ctx.tokens.to_string(),
+        );
+        set_default_env(
+            &mut cmd,
+            "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+            &ctx.auto_compact_at.to_string(),
+        );
         if ctx.disable_compact {
             set_default_env(&mut cmd, "DISABLE_COMPACT", "1");
         }
@@ -135,7 +197,10 @@ pub async fn launch(launch: Launch) -> anyhow::Result<()> {
         } else {
             format!("auto-compact at {}", format_tokens(ctx.auto_compact_at))
         };
-        eprintln!("  Context window: {} tokens ({compact})", format_tokens(ctx.tokens));
+        eprintln!(
+            "  Context window: {} tokens ({compact})",
+            format_tokens(ctx.tokens)
+        );
     }
     eprintln!();
 
@@ -150,7 +215,9 @@ pub async fn launch(launch: Launch) -> anyhow::Result<()> {
     }
     #[cfg(not(unix))]
     {
-        let status = cmd.status().context("launching claude (is Claude Code installed?)")?;
+        let status = cmd
+            .status()
+            .context("launching claude (is Claude Code installed?)")?;
         std::process::exit(status.code().unwrap_or(1));
     }
 }

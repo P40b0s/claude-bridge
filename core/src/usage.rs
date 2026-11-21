@@ -68,7 +68,11 @@ pub enum ResetOutcome {
 
 impl Usage {
     fn unavailable(error: impl Into<String>) -> Self {
-        Self { observed_at: now_ms(), error: Some(error.into()), ..Self::default() }
+        Self {
+            observed_at: now_ms(),
+            error: Some(error.into()),
+            ..Self::default()
+        }
     }
 }
 
@@ -81,7 +85,10 @@ pub struct Report {
 /// Reads every provider the user is logged in to. Never refreshes a ChatGPT token:
 /// its refresh token rotates, and the proxy may be refreshing it at the same moment.
 pub async fn collect() -> Report {
-    Report { claude: load_claude(), codex: codex().await }
+    Report {
+        claude: load_claude(),
+        codex: codex().await,
+    }
 }
 
 /// Asked through the codex exit, after its country check, like the proxy's own calls.
@@ -92,7 +99,9 @@ pub async fn codex() -> Option<Usage> {
         Err(e) => return Some(Usage::unavailable(format!("not asked: {e:#}"))),
     };
     if now_ms() > tokens.expires_at {
-        return Some(Usage::unavailable("token expired; it is refreshed on the next request"));
+        return Some(Usage::unavailable(
+            "token expired; it is refreshed on the next request",
+        ));
     }
     let body = match fetch_json(codex_request(http.get(CODEX_USAGE_URL), &tokens)).await {
         Ok(body) => body,
@@ -100,7 +109,10 @@ pub async fn codex() -> Option<Usage> {
     };
     let mut usage = parse_codex(&body);
     // The list is a second call; skipped while there is nothing in it.
-    if body["rate_limit_reset_credits"]["available_count"].as_i64().unwrap_or(0) > 0
+    if body["rate_limit_reset_credits"]["available_count"]
+        .as_i64()
+        .unwrap_or(0)
+        > 0
         && let Ok(list) = fetch_json(codex_request(http.get(CODEX_RESETS_URL), &tokens)).await
     {
         usage.resets = parse_resets(&list);
@@ -108,8 +120,13 @@ pub async fn codex() -> Option<Usage> {
     Some(usage)
 }
 
-fn codex_request(rb: reqwest::RequestBuilder, tokens: &auth::openai::CodexTokens) -> reqwest::RequestBuilder {
-    let rb = rb.bearer_auth(&tokens.access_token).header("originator", "codex_cli_rs");
+fn codex_request(
+    rb: reqwest::RequestBuilder,
+    tokens: &auth::openai::CodexTokens,
+) -> reqwest::RequestBuilder {
+    let rb = rb
+        .bearer_auth(&tokens.access_token)
+        .header("originator", "codex_cli_rs");
     match &tokens.account_id {
         Some(account) => rb.header("chatgpt-account-id", account),
         None => rb,
@@ -136,8 +153,12 @@ fn parse_resets(body: &Value) -> Vec<ResetCredit> {
 
 /// Uses one free reset, through the codex exit after its country check, as Codex CLI does.
 pub async fn use_codex_reset(credit_id: &str) -> anyhow::Result<ResetOutcome> {
-    let (tokens, _) = auth::openai::load().ok_or_else(|| anyhow::anyhow!("not logged in to ChatGPT"))?;
-    anyhow::ensure!(now_ms() < tokens.expires_at, "the ChatGPT token expired; it is refreshed on the next request");
+    let (tokens, _) =
+        auth::openai::load().ok_or_else(|| anyhow::anyhow!("not logged in to ChatGPT"))?;
+    anyhow::ensure!(
+        now_ms() < tokens.expires_at,
+        "the ChatGPT token expired; it is refreshed on the next request"
+    );
     let http = crate::exits::outside_client("codex").await?;
     let body = serde_json::json!({
         "redeem_request_id": uuid::Uuid::new_v4().to_string(),
@@ -167,7 +188,10 @@ fn parse_codex(body: &Value) -> Usage {
             Some(Window {
                 id: name.trim_end_matches("_window").into(),
                 model: None,
-                window_minutes: w.get("limit_window_seconds").and_then(Value::as_i64).map(|s| s / 60),
+                window_minutes: w
+                    .get("limit_window_seconds")
+                    .and_then(Value::as_i64)
+                    .map(|s| s / 60),
                 used_percent: w.get("used_percent").and_then(Value::as_f64)?,
                 resets_at: w.get("reset_at").and_then(Value::as_i64).map(|s| s * 1000),
             })
@@ -175,7 +199,8 @@ fn parse_codex(body: &Value) -> Usage {
         .collect();
     Usage {
         windows,
-        limited: limits["limit_reached"].as_bool() == Some(true) || limits["allowed"].as_bool() == Some(false),
+        limited: limits["limit_reached"].as_bool() == Some(true)
+            || limits["allowed"].as_bool() == Some(false),
         observed_at: now_ms(),
         ..Usage::default()
     }
@@ -196,7 +221,9 @@ pub fn from_anthropic_headers(headers: &HeaderMap) -> Option<Usage> {
     let mut windows: Vec<Window> = Vec::new();
     let mut limited = false;
     for (name, value) in headers {
-        let Some(rest) = name.as_str().strip_prefix(CLAUDE_HEADER_PREFIX) else { continue };
+        let Some(rest) = name.as_str().strip_prefix(CLAUDE_HEADER_PREFIX) else {
+            continue;
+        };
         let Ok(value) = value.to_str() else { continue };
         if rest == "status" {
             limited = value == "rejected";
@@ -214,21 +241,43 @@ pub fn from_anthropic_headers(headers: &HeaderMap) -> Option<Usage> {
             }
         };
         match field {
-            "utilization" => windows[index].used_percent = (value.parse::<f64>().unwrap_or(0.0) * 1000.0).round() / 10.0,
+            "utilization" => {
+                windows[index].used_percent =
+                    (value.parse::<f64>().unwrap_or(0.0) * 1000.0).round() / 10.0
+            }
             _ => windows[index].resets_at = value.parse::<i64>().ok().map(|s| s * 1000),
         }
     }
     windows.sort_by_key(|w| (w.window_minutes, w.model.clone()));
-    (!windows.is_empty()).then(|| Usage { windows, limited, observed_at: now_ms(), ..Usage::default() })
+    (!windows.is_empty()).then(|| Usage {
+        windows,
+        limited,
+        observed_at: now_ms(),
+        ..Usage::default()
+    })
 }
 
 /// `5h` → 300 minutes; `7d_opus` → a week, Opus only.
 fn claude_window(id: &str) -> Window {
-    let (span, model) = id.split_once('_').map_or((id, None), |(s, m)| (s, Some(m.to_string())));
-    let minutes = span.strip_suffix('h').and_then(|h| h.parse::<i64>().ok()).map(|h| h * 60).or_else(|| {
-        span.strip_suffix('d').and_then(|d| d.parse::<i64>().ok()).map(|d| d * 24 * 60)
-    });
-    Window { id: id.into(), model, window_minutes: minutes, used_percent: 0.0, resets_at: None }
+    let (span, model) = id
+        .split_once('_')
+        .map_or((id, None), |(s, m)| (s, Some(m.to_string())));
+    let minutes = span
+        .strip_suffix('h')
+        .and_then(|h| h.parse::<i64>().ok())
+        .map(|h| h * 60)
+        .or_else(|| {
+            span.strip_suffix('d')
+                .and_then(|d| d.parse::<i64>().ok())
+                .map(|d| d * 24 * 60)
+        });
+    Window {
+        id: id.into(),
+        model,
+        window_minutes: minutes,
+        used_percent: 0.0,
+        resets_at: None,
+    }
 }
 
 fn claude_file() -> PathBuf {
@@ -241,7 +290,8 @@ pub fn load_claude() -> Option<Usage> {
 
 /// Keeps the latest Claude numbers; skips the write when nothing but the time changed.
 pub fn save_claude(usage: &Usage) {
-    let same = load_claude().is_some_and(|old| old.windows == usage.windows && old.limited == usage.limited);
+    let same = load_claude()
+        .is_some_and(|old| old.windows == usage.windows && old.limited == usage.limited);
     if same {
         return;
     }
@@ -271,7 +321,10 @@ pub(crate) fn parse_rfc3339_ms(s: &str) -> Option<i64> {
         None => (time, 0),
     };
     let mut c = clock.splitn(3, ':');
-    let (h, min) = (c.next()?.parse::<i64>().ok()?, c.next()?.parse::<i64>().ok()?);
+    let (h, min) = (
+        c.next()?.parse::<i64>().ok()?,
+        c.next()?.parse::<i64>().ok()?,
+    );
     let secs: f64 = c.next().unwrap_or("0").parse().ok()?;
     // Days from civil (Howard Hinnant).
     let y = if m <= 2 { y - 1 } else { y };
@@ -292,25 +345,52 @@ mod tests {
     #[test]
     fn rfc3339() {
         assert_eq!(parse_rfc3339_ms("1970-01-01T00:00:00Z"), Some(0));
-        assert_eq!(parse_rfc3339_ms("2026-10-25T09:00:00Z"), Some(1_792_918_800_000));
-        assert_eq!(parse_rfc3339_ms("2026-10-25T12:00:00.5+03:00"), Some(1_792_918_800_500));
+        assert_eq!(
+            parse_rfc3339_ms("2026-10-25T09:00:00Z"),
+            Some(1_792_918_800_000)
+        );
+        assert_eq!(
+            parse_rfc3339_ms("2026-10-25T12:00:00.5+03:00"),
+            Some(1_792_918_800_500)
+        );
     }
 
     #[test]
     fn claude_headers() {
         let mut h = HeaderMap::new();
-        h.insert("anthropic-ratelimit-unified-7d_opus-utilization", "0.5".parse().unwrap());
-        h.insert("anthropic-ratelimit-unified-5h-utilization", "0.23".parse().unwrap());
-        h.insert("anthropic-ratelimit-unified-5h-reset", "1793005200".parse().unwrap());
-        h.insert("anthropic-ratelimit-unified-status", "allowed".parse().unwrap());
-        h.insert("anthropic-ratelimit-unified-representative-claim", "five_hour".parse().unwrap());
+        h.insert(
+            "anthropic-ratelimit-unified-7d_opus-utilization",
+            "0.5".parse().unwrap(),
+        );
+        h.insert(
+            "anthropic-ratelimit-unified-5h-utilization",
+            "0.23".parse().unwrap(),
+        );
+        h.insert(
+            "anthropic-ratelimit-unified-5h-reset",
+            "1793005200".parse().unwrap(),
+        );
+        h.insert(
+            "anthropic-ratelimit-unified-status",
+            "allowed".parse().unwrap(),
+        );
+        h.insert(
+            "anthropic-ratelimit-unified-representative-claim",
+            "five_hour".parse().unwrap(),
+        );
         let u = from_anthropic_headers(&h).unwrap();
         assert!(!u.limited);
         assert_eq!(u.windows.len(), 2);
-        assert_eq!((u.windows[0].id.as_str(), u.windows[0].window_minutes), ("5h", Some(300)));
+        assert_eq!(
+            (u.windows[0].id.as_str(), u.windows[0].window_minutes),
+            ("5h", Some(300))
+        );
         assert!((u.windows[0].used_percent - 23.0).abs() < 1e-9);
         assert_eq!(u.windows[0].resets_at, Some(1_793_005_200_000));
-        assert_eq!((u.windows[1].model.as_deref(), u.windows[1].window_minutes), (Some("opus"), Some(7 * 24 * 60)));
+        assert_eq!(
+            (u.windows[1].model.as_deref(), u.windows[1].window_minutes),
+            (Some("opus"), Some(7 * 24 * 60))
+        );
         assert!(from_anthropic_headers(&HeaderMap::new()).is_none());
     }
 
@@ -325,10 +405,20 @@ mod tests {
             { "id": "other-plan", "status": "available", "is_supported_by_plan": false, "title": "x" }
         ]});
         let resets = parse_resets(&list);
-        assert_eq!(resets.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["a", "b"], "soonest to expire first");
+        assert_eq!(
+            resets.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+            ["a", "b"],
+            "soonest to expire first"
+        );
         assert!(resets[0].expires_at.is_some());
-        assert_eq!(parse_reset_outcome(&serde_json::json!({ "code": "reset", "windows_reset": 2 })), ResetOutcome::Reset(2));
-        assert_eq!(parse_reset_outcome(&serde_json::json!({ "code": "nothing_to_reset" })), ResetOutcome::NothingToReset);
+        assert_eq!(
+            parse_reset_outcome(&serde_json::json!({ "code": "reset", "windows_reset": 2 })),
+            ResetOutcome::Reset(2)
+        );
+        assert_eq!(
+            parse_reset_outcome(&serde_json::json!({ "code": "nothing_to_reset" })),
+            ResetOutcome::NothingToReset
+        );
     }
 
     #[test]

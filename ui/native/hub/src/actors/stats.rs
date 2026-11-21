@@ -16,7 +16,9 @@ impl StatsActor {
     pub fn new(self_addr: Address<Self>) -> Self {
         let mut owned_tasks = JoinSet::new();
         owned_tasks.spawn(super::forward::<StatsRequest, _>(self_addr));
-        Self { _owned_tasks: owned_tasks }
+        Self {
+            _owned_tasks: owned_tasks,
+        }
     }
 }
 
@@ -38,12 +40,17 @@ fn all(t: &Tokens) -> u64 {
 #[async_trait]
 impl Notifiable<StatsRequest> for StatsActor {
     async fn notify(&mut self, request: StatsRequest, _: &Context<Self>) {
-        let parse = |s: &str| s.parse::<jiff::civil::Date>().map_err(|e| anyhow::anyhow!("{s}: {e}"));
+        let parse = |s: &str| {
+            s.parse::<jiff::civil::Date>()
+                .map_err(|e| anyhow::anyhow!("{s}: {e}"))
+        };
         let (from, to) = match (parse(&request.from), parse(&request.to)) {
             (Ok(from), Ok(to)) => (from, to),
             (Err(e), _) | (_, Err(e)) => return ErrorSignal::error(&e),
         };
-        let days = tokio::task::spawn_blocking(move || stats::range(from, to)).await.unwrap_or_default();
+        let days = tokio::task::spawn_blocking(move || stats::range(from, to))
+            .await
+            .unwrap_or_default();
         let mut total = Tokens::default();
         let mut models = std::collections::BTreeMap::<String, Tokens>::new();
         for (_, day) in &days {
@@ -58,8 +65,20 @@ impl Notifiable<StatsRequest> for StatsActor {
             from: request.from,
             to: request.to,
             total: tokens(&total),
-            days: days.iter().map(|(date, day)| StatsDay { date: date.to_string(), tokens: tokens(&day.total()) }).collect(),
-            models: models.iter().map(|(model, t)| StatsModel { model: model.clone(), tokens: tokens(t) }).collect(),
+            days: days
+                .iter()
+                .map(|(date, day)| StatsDay {
+                    date: date.to_string(),
+                    tokens: tokens(&day.total()),
+                })
+                .collect(),
+            models: models
+                .iter()
+                .map(|(model, t)| StatsModel {
+                    model: model.clone(),
+                    tokens: tokens(t),
+                })
+                .collect(),
             dir: stats::dir().display().to_string(),
         }
         .send_signal_to_dart();

@@ -29,12 +29,14 @@ pub struct PinModel {
 
 #[derive(Deserialize, Serialize, Clone, Copy, PartialEq, SignalPiece)]
 pub enum AuthProvider {
+    Claude,
     ChatGpt,
 }
 
 #[derive(Deserialize, DartSignal)]
 pub struct LoginRequest {
     pub provider: AuthProvider,
+    pub profile: String,
 }
 
 #[derive(Deserialize, DartSignal)]
@@ -43,6 +45,13 @@ pub struct CancelLogin {}
 #[derive(Deserialize, DartSignal)]
 pub struct LogoutRequest {
     pub provider: AuthProvider,
+    pub profile: String,
+}
+
+#[derive(Deserialize, DartSignal)]
+pub struct ActivateAccount {
+    pub provider: AuthProvider,
+    pub profile: String,
 }
 
 /// Adds the proxy to Claude Code's settings.json, or takes it out.
@@ -170,6 +179,8 @@ pub struct ProxyState {
 
 #[derive(Serialize, Clone, SignalPiece)]
 pub struct ChatGptAccount {
+    pub id: String,
+    pub active: bool,
     pub email: Option<String>,
     pub plan: Option<String>,
     /// "claude-bridge" or "codex-cli".
@@ -182,6 +193,8 @@ pub struct ChatGptAccount {
 /// Claude Code's own login; only its account record is read, never its credentials.
 #[derive(Serialize, Clone, SignalPiece)]
 pub struct ClaudeCodeAccount {
+    pub id: String,
+    pub active: bool,
     pub email: Option<String>,
     pub organization: Option<String>,
     /// `Pro`, `Max`, `Team`…
@@ -193,8 +206,8 @@ pub struct ClaudeCodeAccount {
 
 #[derive(Serialize, RustSignal)]
 pub struct AccountsState {
-    pub claude_code: Option<ClaudeCodeAccount>,
-    pub chatgpt: Option<ChatGptAccount>,
+    pub claude_code: Vec<ClaudeCodeAccount>,
+    pub chatgpt: Vec<ChatGptAccount>,
 }
 
 #[derive(Serialize, Clone, SignalPiece)]
@@ -246,6 +259,7 @@ pub enum LoginPhase {
 #[derive(Serialize, RustSignal)]
 pub struct LoginState {
     pub provider: AuthProvider,
+    pub profile: String,
     pub phase: LoginPhase,
     pub url: Option<String>,
     pub message: Option<String>,
@@ -403,6 +417,15 @@ pub struct SettingsState {
     pub from_environment: Vec<String>,
     pub file_path: String,
     pub efforts: Vec<String>,
+    /// Browsers installed on this system, for `CLAUDE_BRIDGE_BROWSER`.
+    pub browsers: Vec<BrowserInfo>,
+}
+
+#[derive(Serialize, SignalPiece)]
+pub struct BrowserInfo {
+    /// The value `CLAUDE_BRIDGE_BROWSER` takes.
+    pub id: String,
+    pub name: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, SignalPiece)]

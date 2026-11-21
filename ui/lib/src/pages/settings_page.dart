@@ -4,7 +4,7 @@ import 'package:claude_bridge_ui/src/services/context_watch.dart';
 import 'package:flutter/material.dart';
 import 'package:claude_bridge_ui/src/i18n.dart';
 
-enum _Kind { text, secret, number, choice, flag }
+enum _Kind { text, secret, number, choice, flag, browser }
 
 class _Field {
   const _Field(
@@ -66,9 +66,9 @@ List<_Group> get _groups => [
       kind: _Kind.number,
       hint: tr(
         'По умолчанию 200000. Каждый вызов инструмента заново отправляет весь контекст, поэтому длинная сессия дорогая. '
-        'Для «любого claude через прокси» значение пишется в ~/.claude/settings.json',
+            'Для «любого claude через прокси» значение пишется в ~/.claude/settings.json',
         'Default 200000. Every tool call re-sends the whole context, so a long session is expensive. '
-        'For "any claude through the proxy" the value goes into ~/.claude/settings.json',
+            'For "any claude through the proxy" the value goes into ~/.claude/settings.json',
       ),
     ),
     _Field(
@@ -129,7 +129,10 @@ List<_Group> get _groups => [
     ),
     _Field(
       'CLAUDE_BRIDGE_EGRESS_PORT',
-      tr('Порт для прочего трафика Claude Code', "Port for Claude Code's other traffic"),
+      tr(
+        'Порт для прочего трафика Claude Code',
+        "Port for Claude Code's other traffic",
+      ),
       kind: _Kind.number,
       hint: tr(
         'Всё, что Claude Code шлёт помимо запросов к модели (OAuth, MCP, WebFetch, запускаемые им команды), идёт через '
@@ -166,7 +169,14 @@ List<_Group> get _groups => [
       'CLAUDE_BRIDGE_LOCALE',
       tr('Язык системы для Claude Code', 'System language for Claude Code'),
       kind: _Kind.choice,
-      options: ['', 'en_US.UTF-8', 'C.UTF-8', 'de_DE.UTF-8', 'fr_FR.UTF-8', 'ru_RU.UTF-8'],
+      options: [
+        '',
+        'en_US.UTF-8',
+        'C.UTF-8',
+        'de_DE.UTF-8',
+        'fr_FR.UTF-8',
+        'ru_RU.UTF-8',
+      ],
       hint: tr(
         'Передаётся как LANG и LC_ALL в Claude Code и запускаемые им команды: их вывод (даты, ошибки, git) '
             'уходит модели на этом языке. Локаль должна быть установлена в системе. Применяется к новым сессиям claude',
@@ -217,6 +227,39 @@ List<_Group> get _groups => [
       ),
     ),
     _Field(
+      'CLAUDE_BRIDGE_BROWSER',
+      tr('Браузер для ссылок', 'Browser for links'),
+      kind: _Kind.browser,
+      hint: tr(
+        'Где открываются вход в аккаунт и страницы claude.ai. Если выбранный браузер не запустится, ссылка не уйдёт '
+            'в браузер по умолчанию. В .env можно указать и свою команду: путь к программе с аргументами, %u - ссылка',
+        'Where logins and claude.ai pages open. If the chosen browser fails to start, the link does not fall back to '
+            'the default one. In .env it can also be a command: a program path with arguments, %u is the link',
+      ),
+    ),
+    _Field(
+      'CLAUDE_BRIDGE_BROWSER_PROFILE',
+      tr('Изолированный профиль браузера', 'Isolated browser profile'),
+      hint: tr(
+        'Пусто — обычный профиль для ссылок. Например links создаёт отдельные cookies и хранилище, а трафик идёт '
+            'через выход соответствующего провайдера. Для аккаунтов отдельные профили создаются автоматически',
+        'Empty — the normal profile for links. For example links creates separate cookies and storage and uses the '
+            'matching provider exit. Account-specific profiles are created automatically',
+      ),
+    ),
+    _Field(
+      'CLAUDE_BRIDGE_BROWSER_FINGERPRINT',
+      tr('Отпечаток браузера', 'Browser fingerprint'),
+      kind: _Kind.choice,
+      options: ['', 'resist', 'exit'],
+      hint: tr(
+        'resist (по умолчанию) — Firefox стандартизирует отпечаток, часовой пояс обычно UTC. exit — язык и часовой '
+            'пояс берутся из настроек bridge, чтобы совпадать со страной выхода; защита слабее. Chromium не имеет полного RFP',
+        'resist (default) — Firefox standardizes its fingerprint and normally exposes UTC. exit — language and time '
+            'zone come from bridge settings to match the exit country; protection is weaker. Chromium has no full RFP',
+      ),
+    ),
+    _Field(
       'CLAUDE_BRIDGE_BIN',
       tr('Путь к claude-bridge', 'Path to claude-bridge'),
       hint: tr(
@@ -254,7 +297,9 @@ class _SettingsPageState extends State<SettingsPage> {
     for (final group in _groups) {
       for (final f in group.fields) {
         final value = settings.value(f.key);
-        if (f.kind == _Kind.choice || f.kind == _Kind.flag) {
+        if (f.kind == _Kind.choice ||
+            f.kind == _Kind.flag ||
+            f.kind == _Kind.browser) {
           _choices[f.key] = value;
         } else {
           (_controllers[f.key] ??= TextEditingController()).text = value;
@@ -393,6 +438,27 @@ class _SettingsPageState extends State<SettingsPage> {
                 value: o,
                 child: Text(o.isEmpty ? tr('по умолчанию', 'default') : o),
               ),
+          ],
+          onChanged: (v) => setState(() => _choices[f.key] = v ?? ''),
+        );
+      case _Kind.browser:
+        final browsers =
+            context.appServices.settingsService.provider.state?.browsers ??
+            const [];
+        final current = _choices[f.key] ?? '';
+        final known = current.isEmpty || browsers.any((b) => b.id == current);
+        field = DropdownButtonFormField<String>(
+          initialValue: current,
+          isExpanded: true,
+          decoration: decoration,
+          items: [
+            DropdownMenuItem(
+              value: '',
+              child: Text(tr('системный по умолчанию', 'system default')),
+            ),
+            for (final b in browsers)
+              DropdownMenuItem(value: b.id, child: Text(b.name)),
+            if (!known) DropdownMenuItem(value: current, child: Text(current)),
           ],
           onChanged: (v) => setState(() => _choices[f.key] = v ?? ''),
         );

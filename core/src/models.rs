@@ -109,9 +109,16 @@ pub fn save(
     if name.is_empty() || model.is_empty() {
         bail!("model name and model ID are required");
     }
-    let provider = Provider::parse(provider).ok_or_else(|| anyhow::anyhow!("unknown provider: {provider}"))?;
-    let reasoning = match reasoning.as_deref().filter(|value| !value.trim().is_empty()) {
-        Some(value) => Some(Reasoning::parse(value).ok_or_else(|| anyhow::anyhow!("unknown reasoning effort: {value}"))?),
+    let provider =
+        Provider::parse(provider).ok_or_else(|| anyhow::anyhow!("unknown provider: {provider}"))?;
+    let reasoning = match reasoning
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        Some(value) => Some(
+            Reasoning::parse(value)
+                .ok_or_else(|| anyhow::anyhow!("unknown reasoning effort: {value}"))?,
+        ),
         None => None,
     };
     let mut file = read_file();
@@ -119,7 +126,13 @@ pub fn save(
     if id.starts_with("builtin:") {
         bail!("built-in models cannot be edited");
     }
-    let entry = CustomModel { id: id.clone(), name: name.into(), provider, model: model.into(), reasoning };
+    let entry = CustomModel {
+        id: id.clone(),
+        name: name.into(),
+        provider,
+        model: model.into(),
+        reasoning,
+    };
     if let Some(existing) = file.models.iter_mut().find(|m| m.id == id) {
         *existing = entry.clone();
     } else {
@@ -146,7 +159,10 @@ pub fn delete(id: &str) -> anyhow::Result<()> {
 }
 
 pub fn select(id: &str) -> anyhow::Result<Target> {
-    let model = list().into_iter().find(|model| model.id == id).ok_or_else(|| anyhow::anyhow!("model not found"))?;
+    let model = list()
+        .into_iter()
+        .find(|model| model.id == id)
+        .ok_or_else(|| anyhow::anyhow!("model not found"))?;
     let mut file = read_file();
     file.selected = Some(id.into());
     write_file(&file)?;
@@ -154,7 +170,10 @@ pub fn select(id: &str) -> anyhow::Result<Target> {
 }
 
 pub fn selected() -> Option<Target> {
-    list().into_iter().find(|model| model.selected).map(|model| model.target)
+    list()
+        .into_iter()
+        .find(|model| model.selected)
+        .map(|model| model.target)
 }
 
 #[cfg(test)]

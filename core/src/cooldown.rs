@@ -17,7 +17,11 @@ impl Cooldowns {
     /// Remembers the reset time of a limit error.
     pub fn note(&self, provider: Provider, err: &ProxyError) {
         if let Some(at) = err.retry_at {
-            tracing::warn!(provider = provider.as_str(), resets_in_s = (at - now_ms()) / 1000, "usage limit reached");
+            tracing::warn!(
+                provider = provider.as_str(),
+                resets_in_s = (at - now_ms()) / 1000,
+                "usage limit reached"
+            );
             self.0.lock().unwrap().insert(provider, at);
         }
     }
@@ -25,7 +29,9 @@ impl Cooldowns {
     /// Err while the provider's limit has not reset yet.
     pub fn check(&self, provider: Provider) -> Result<(), ProxyError> {
         let mut limits = self.0.lock().unwrap();
-        let Some(&at) = limits.get(&provider) else { return Ok(()) };
+        let Some(&at) = limits.get(&provider) else {
+            return Ok(());
+        };
         if at <= now_ms() {
             limits.remove(&provider);
             return Ok(());
@@ -36,7 +42,10 @@ impl Cooldowns {
             local_time(at),
             duration(at - now_ms()),
         );
-        Err(ProxyError { retry_at: Some(at), ..ProxyError::new(StatusCode::TOO_MANY_REQUESTS, message) })
+        Err(ProxyError {
+            retry_at: Some(at),
+            ..ProxyError::new(StatusCode::TOO_MANY_REQUESTS, message)
+        })
     }
 }
 
@@ -52,10 +61,17 @@ fn label(provider: Provider) -> &'static str {
 /// `17:46`, or `26.10 09:15` when the reset is not today.
 fn local_time(at_ms: i64) -> String {
     let tz = jiff::tz::TimeZone::system();
-    let Ok(at) = jiff::Timestamp::from_millisecond(at_ms) else { return at_ms.to_string() };
+    let Ok(at) = jiff::Timestamp::from_millisecond(at_ms) else {
+        return at_ms.to_string();
+    };
     let at = at.to_zoned(tz.clone());
     let today = jiff::Timestamp::now().to_zoned(tz).date();
-    at.strftime(if at.date() == today { "%H:%M" } else { "%d.%m %H:%M" }).to_string()
+    at.strftime(if at.date() == today {
+        "%H:%M"
+    } else {
+        "%d.%m %H:%M"
+    })
+    .to_string()
 }
 
 fn duration(ms: i64) -> String {
@@ -73,14 +89,24 @@ mod tests {
     #[test]
     fn answers_until_reset() {
         let cooldowns = Cooldowns::default();
-        let limited = ProxyError { retry_at: Some(now_ms() + 3_600_000), ..ProxyError::new(StatusCode::TOO_MANY_REQUESTS, "") };
+        let limited = ProxyError {
+            retry_at: Some(now_ms() + 3_600_000),
+            ..ProxyError::new(StatusCode::TOO_MANY_REQUESTS, "")
+        };
         cooldowns.note(Provider::CodexOauth, &limited);
         let err = cooldowns.check(Provider::CodexOauth).unwrap_err();
         assert_eq!(err.status, StatusCode::TOO_MANY_REQUESTS);
-        assert!(err.message.starts_with("ChatGPT usage limit until "), "{}", err.message);
+        assert!(
+            err.message.starts_with("ChatGPT usage limit until "),
+            "{}",
+            err.message
+        );
         assert!(cooldowns.check(Provider::Openai).is_ok());
 
-        let expired = ProxyError { retry_at: Some(now_ms() - 1), ..limited };
+        let expired = ProxyError {
+            retry_at: Some(now_ms() - 1),
+            ..limited
+        };
         cooldowns.note(Provider::CodexOauth, &expired);
         assert!(cooldowns.check(Provider::CodexOauth).is_ok());
     }

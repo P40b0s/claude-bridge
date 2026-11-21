@@ -286,7 +286,11 @@ async fn exits_report(State(state): State<Arc<AppState>>, headers: HeaderMap) ->
 
 /// The local SOCKS5 port of an SSH exit's tunnel, for the UI and CLI calls that must leave the
 /// same way (usage limits, logins).
-async fn tunnel_port(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(body): Json<Value>) -> Response {
+async fn tunnel_port(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Response {
     if let Err(e) = control_allowed(&headers) {
         return e.into_response();
     }
@@ -302,13 +306,16 @@ async fn tunnel_port(State(state): State<Arc<AppState>>, headers: HeaderMap, Jso
 
 /// Upstream origin of a provider family, for the country check.
 pub fn family_origin(family: &str) -> String {
-    Provider::for_family(family).map(upstream_origin).unwrap_or_else(|| geo::NEUTRAL_ORIGIN.into())
+    Provider::for_family(family)
+        .map(upstream_origin)
+        .unwrap_or_else(|| geo::NEUTRAL_ORIGIN.into())
 }
 
 /// Scheme and host the provider's calls go to, for the country check.
 pub fn upstream_origin(provider: Provider) -> String {
     let base = match provider {
-        Provider::Anthropic => config::env("ANTHROPIC_UPSTREAM_URL").unwrap_or_else(|| anthropic::DEFAULT_UPSTREAM.into()),
+        Provider::Anthropic => config::env("ANTHROPIC_UPSTREAM_URL")
+            .unwrap_or_else(|| anthropic::DEFAULT_UPSTREAM.into()),
         Provider::CodexOauth => codex::CHATGPT_CODEX_BASE.into(),
         Provider::Openai => codex::OPENAI_API_BASE.into(),
         Provider::OpenaiCompat => config::env("OPENAI_COMPAT_BASE_URL").unwrap_or_default(),
@@ -403,7 +410,9 @@ async fn route_message(
             let id = tracker.id();
             move |usage| state.log.set_usage(id, usage)
         };
-        return match anthropic::passthrough(&http, raw, &target.model, &headers, query, on_usage).await {
+        return match anthropic::passthrough(&http, raw, &target.model, &headers, query, on_usage)
+            .await
+        {
             Ok(resp) => {
                 state
                     .log
@@ -436,9 +445,15 @@ async fn route_message(
             codex::run(state.clone(), http, req, target, CodexAuth::ChatGpt, writer).boxed()
         }
         Provider::Openai => match key("OPENAI_API_KEY") {
-            Ok(key) => {
-                codex::run(state.clone(), http, req, target, CodexAuth::ApiKey(key), writer).boxed()
-            }
+            Ok(key) => codex::run(
+                state.clone(),
+                http,
+                req,
+                target,
+                CodexAuth::ApiKey(key),
+                writer,
+            )
+            .boxed(),
             Err(e) => return Err(Box::new((e, tracker))),
         },
         Provider::OpenaiCompat => match config::env("OPENAI_COMPAT_BASE_URL") {

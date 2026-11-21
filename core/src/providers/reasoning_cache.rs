@@ -68,7 +68,11 @@ impl ReasoningCache {
         let mut entries = self.entries.lock().unwrap();
         reap(&mut entries);
         let now = Instant::now();
-        let e = entries.entry(key.to_string()).or_insert_with(|| Entry { steps: HashMap::new(), turn_state: None, last_access: now });
+        let e = entries.entry(key.to_string()).or_insert_with(|| Entry {
+            steps: HashMap::new(),
+            turn_state: None,
+            last_access: now,
+        });
         f(e);
         e.last_access = now;
     }
@@ -144,7 +148,14 @@ pub fn conversation_key(messages: &[Message]) -> String {
 /// UUID-shaped `prompt_cache_key` for a conversation key.
 pub fn thread_id(key: &str) -> String {
     let k = format!("{key:0<24}");
-    format!("{}-{}-{}-{}-{:0<12}", &k[..8], &k[8..12], &k[12..16], &k[16..20], &k[20..24])
+    format!(
+        "{}-{}-{}-{}-{:0<12}",
+        &k[..8],
+        &k[8..12],
+        &k[12..16],
+        &k[16..20],
+        &k[20..24]
+    )
 }
 
 #[cfg(test)]
@@ -152,7 +163,10 @@ mod tests {
     use super::*;
 
     fn user(text: &str) -> Message {
-        Message { role: "user".into(), content: Content::Text(text.into()) }
+        Message {
+            role: "user".into(),
+            content: Content::Text(text.into()),
+        }
     }
 
     #[test]

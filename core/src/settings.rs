@@ -21,7 +21,9 @@ pub fn read() -> BTreeMap<String, String> {
 }
 
 fn quote(value: &str) -> String {
-    let plain = value.chars().all(|c| c.is_ascii_alphanumeric() || "-_./:@+,=".contains(c));
+    let plain = value
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || "-_./:@+,=".contains(c));
     if plain && !value.is_empty() {
         value.to_string()
     } else {
@@ -84,8 +86,9 @@ mod tests {
     fn quoting_round_trips_through_dotenvy() {
         for value in ["sk-abc_123", "with space", "quote\"and\\slash", "#hash", ""] {
             let line = format!("K={}", quote(value));
-            let parsed: Vec<(String, String)> =
-                dotenvy::from_read_iter(line.as_bytes()).filter_map(Result::ok).collect();
+            let parsed: Vec<(String, String)> = dotenvy::from_read_iter(line.as_bytes())
+                .filter_map(Result::ok)
+                .collect();
             assert_eq!(parsed, vec![("K".to_string(), value.to_string())], "{line}");
         }
     }

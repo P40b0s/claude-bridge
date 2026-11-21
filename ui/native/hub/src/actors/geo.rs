@@ -68,7 +68,9 @@ impl GeoActor {
             proxy_running: false,
         };
         Self {
-            local: server::http_client().ok().map(|http| Arc::new(Exits::new(http))),
+            local: server::http_client()
+                .ok()
+                .map(|http| Arc::new(Exits::new(http))),
             self_addr,
             state,
             report: None,
@@ -93,7 +95,11 @@ impl GeoActor {
         self.state.enabled = shared.enabled;
         self.state.allowed = shared.allowed;
 
-        let probes: Vec<Probe> = self.report.as_ref().map(|r| r.exits.clone()).unwrap_or_default();
+        let probes: Vec<Probe> = self
+            .report
+            .as_ref()
+            .map(|r| r.exits.clone())
+            .unwrap_or_default();
         let found = |spec: &str| probes.iter().find(|p| p.spec == spec);
         let mut all = vec![Exit::Direct];
         all.extend(exits::listed());
@@ -109,13 +115,20 @@ impl GeoActor {
                 self.state.error = direct.error.as_ref().map(|e| {
                     format!(
                         "{}: {e}",
-                        tr("Не удалось определить местоположение", "Location lookup failed")
+                        tr(
+                            "Не удалось определить местоположение",
+                            "Location lookup failed"
+                        )
                     )
                 });
             }
         }
 
-        let family_probes = self.report.as_ref().map(|r| r.families.clone()).unwrap_or_default();
+        let family_probes = self
+            .report
+            .as_ref()
+            .map(|r| r.families.clone())
+            .unwrap_or_default();
         self.state.providers = exits::FAMILIES
             .iter()
             .filter(|f| !claude_bridge_core::families::is_disabled(f))
@@ -279,7 +292,8 @@ impl Notifiable<SetProviderGeo> for GeoActor {
             (exits::route_key(&msg.family), route),
             (
                 geo::allowed_key(&msg.family),
-                msg.allowed.map(|list| geo::format_list(&known_countries(&list))),
+                msg.allowed
+                    .map(|list| geo::format_list(&known_countries(&list))),
             ),
         ]));
         self.send_state();

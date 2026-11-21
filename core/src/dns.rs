@@ -41,7 +41,10 @@ pub fn ipv6_enabled() -> bool {
 }
 
 fn setting(key: &str) -> Option<String> {
-    settings::read().remove(key).filter(|v| !v.trim().is_empty()).or_else(|| config::env(key))
+    settings::read()
+        .remove(key)
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| config::env(key))
 }
 
 /// The resolvers from `CLAUDE_BRIDGE_DOH_SERVERS`, comma-separated. Each must name its host by IP:
@@ -53,8 +56,12 @@ pub fn servers() -> anyhow::Result<Vec<url::Url>> {
 fn parse_servers(list: &str) -> anyhow::Result<Vec<url::Url>> {
     let mut out = Vec::new();
     for spec in list.split(',').map(str::trim).filter(|s| !s.is_empty()) {
-        let url = url::Url::parse(spec).map_err(|e| anyhow::anyhow!("{SERVERS_KEY}: bad URL {spec:?}: {e}"))?;
-        anyhow::ensure!(url.scheme() == "https", "{SERVERS_KEY}: {spec} is not https");
+        let url = url::Url::parse(spec)
+            .map_err(|e| anyhow::anyhow!("{SERVERS_KEY}: bad URL {spec:?}: {e}"))?;
+        anyhow::ensure!(
+            url.scheme() == "https",
+            "{SERVERS_KEY}: {spec} is not https"
+        );
         anyhow::ensure!(
             matches!(url.host(), Some(url::Host::Ipv4(_) | url::Host::Ipv6(_))),
             "{SERVERS_KEY}: {spec} must name its host by IP (https://1.1.1.1/dns-query), not by name"
@@ -78,8 +85,16 @@ impl Doh {
         static DOH: OnceLock<Arc<Doh>> = OnceLock::new();
         DOH.get_or_init(|| {
             // The endpoints are IPs: this client never resolves anything.
-            let http = reqwest::Client::builder().no_proxy().timeout(TIMEOUT).build().unwrap_or_default();
-            Arc::new(Doh { http, servers: servers().map_err(|e| format!("{e:#}")), cache: Mutex::default() })
+            let http = reqwest::Client::builder()
+                .no_proxy()
+                .timeout(TIMEOUT)
+                .build()
+                .unwrap_or_default();
+            Arc::new(Doh {
+                http,
+                servers: servers().map_err(|e| format!("{e:#}")),
+                cache: Mutex::default(),
+            })
         })
         .clone()
     }
@@ -87,18 +102,31 @@ impl Doh {
     /// IPv4 first: a broken IPv6 route is more common than a broken IPv4 one.
     pub async fn lookup(&self, name: &str) -> anyhow::Result<Vec<IpAddr>> {
         let name = name.trim_end_matches('.').to_ascii_lowercase();
-        if let Ok(ip) = name.trim_start_matches('[').trim_end_matches(']').parse::<IpAddr>() {
+        if let Ok(ip) = name
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse::<IpAddr>()
+        {
             return Ok(vec![ip]);
         }
         if name == "localhost" {
             return Ok(vec![IpAddr::from([127, 0, 0, 1])]);
         }
-        let cached = self.cache.lock().unwrap().get(&name).filter(|(_, until)| Instant::now() < *until).map(|(ips, _)| ips.clone());
+        let cached = self
+            .cache
+            .lock()
+            .unwrap()
+            .get(&name)
+            .filter(|(_, until)| Instant::now() < *until)
+            .map(|(ips, _)| ips.clone());
         let ips = match cached {
             Some(ips) => ips,
             None => self.lookup_all(&name).await?,
         };
-        let ips: Vec<IpAddr> = ips.into_iter().filter(|ip| ip.is_ipv4() || ipv6_enabled()).collect();
+        let ips: Vec<IpAddr> = ips
+            .into_iter()
+            .filter(|ip| ip.is_ipv4() || ipv6_enabled())
+            .collect();
         anyhow::ensure!(!ips.is_empty(), "{name} has no IPv4 address ({IPV6_KEY}=0)");
         Ok(ips)
     }
@@ -108,7 +136,10 @@ impl Doh {
         let servers = self.servers.as_ref().map_err(|e| anyhow::anyhow!("{e}"))?;
         let mut errors = Vec::new();
         for server in servers {
-            let (v4, v6) = tokio::join!(self.query(server, &name, "A"), self.query(server, &name, "AAAA"));
+            let (v4, v6) = tokio::join!(
+                self.query(server, &name, "A"),
+                self.query(server, &name, "AAAA")
+            );
             match (v4, v6) {
                 (Err(e), Err(_)) => errors.push(format!("{server}: {e:#}")),
                 (v4, v6) => {
@@ -123,7 +154,10 @@ impl Doh {
                     }
                     let ttl = Duration::from_secs(ttl.clamp(MIN_TTL, MAX_TTL));
                     debug!(%name, ?ips, "resolved over https");
-                    self.cache.lock().unwrap().insert(name, (ips.clone(), Instant::now() + ttl));
+                    self.cache
+                        .lock()
+                        .unwrap()
+                        .insert(name, (ips.clone(), Instant::now() + ttl));
                     return Ok(ips);
                 }
             }
@@ -135,9 +169,16 @@ impl Doh {
     }
 
     /// Addresses of one record type and the smallest TTL among them.
-    async fn query(&self, server: &url::Url, name: &str, kind: &str) -> anyhow::Result<(Vec<IpAddr>, u64)> {
+    async fn query(
+        &self,
+        server: &url::Url,
+        name: &str,
+        kind: &str,
+    ) -> anyhow::Result<(Vec<IpAddr>, u64)> {
         let mut url = server.clone();
-        url.query_pairs_mut().append_pair("name", name).append_pair("type", kind);
+        url.query_pairs_mut()
+            .append_pair("name", name)
+            .append_pair("type", kind);
         let body: Value = self
             .http
             .get(url)
@@ -147,7 +188,11 @@ impl Doh {
             .error_for_status()?
             .json()
             .await?;
-        anyhow::ensure!(body["Status"].as_i64() == Some(0) || body["Status"].as_i64() == Some(3), "status {}", body["Status"]);
+        anyhow::ensure!(
+            body["Status"].as_i64() == Some(0) || body["Status"].as_i64() == Some(3),
+            "status {}",
+            body["Status"]
+        );
         Ok(parse_answers(&body, if kind == "A" { 1 } else { 28 }))
     }
 }
@@ -204,7 +249,13 @@ mod tests {
             { "type": 1, "TTL": 120, "data": "160.79.104.11" }
         ]});
         let (ips, ttl) = parse_answers(&body, 1);
-        assert_eq!(ips, vec!["160.79.104.10".parse::<IpAddr>().unwrap(), "160.79.104.11".parse().unwrap()]);
+        assert_eq!(
+            ips,
+            vec![
+                "160.79.104.10".parse::<IpAddr>().unwrap(),
+                "160.79.104.11".parse().unwrap()
+            ]
+        );
         assert_eq!(ttl, 120);
         assert_eq!(parse_answers(&body, 28), (vec![], 0));
     }

@@ -324,6 +324,20 @@ class _ExitsCardState extends State<_ExitsCard>
           ),
           const SizedBox(height: 8),
           Text(
+            tr('Форматы:\n'
+                '  ssh://[user@]host[:port] (порт 22 по умолчанию, работают алиасы из ~/.ssh/config)\n'
+                '  socks5://[user:pass@]host[:port] (1080 по умолчанию; имена резолвятся на стороне прокси)\n'
+                '  http://[user:pass@]host[:port]\n'
+                'Логин и пароль прокси указываются прямо в адресе. Символы @ : / # ? % в них кодируйте: @ → %40, : → %3A, / → %2F, # → %23, ? → %3F, % → %25.',
+                'Formats:\n'
+                '  ssh://[user@]host[:port] (port 22 by default, ~/.ssh/config aliases work)\n'
+                '  socks5://[user:pass@]host[:port] (1080 by default; names are resolved on the proxy side)\n'
+                '  http://[user:pass@]host[:port]\n'
+                'Proxy login and password go right into the address. Encode @ : / # ? % in them: @ → %40, : → %3A, / → %2F, # → %23, ? → %3F, % → %25.'),
+            style: TextStyle(color: theme.hintColor),
+          ),
+          const SizedBox(height: 8),
+          Text(
             tr('SSH: прокси сам держит туннель (ssh -D) и пускает через него запросы. На сервере нужен только sshd с входом по '
                 'ключу: ключ должен работать без пароля (ssh-copy-id user@host, затем проверьте ssh user@host). '
                 'Если туннель упал, запросы не уходят напрямую, а отклоняются.',

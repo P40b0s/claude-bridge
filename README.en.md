@@ -138,8 +138,12 @@ The proxy itself ignores `HTTPS_PROXY` and `HTTP_PROXY`: the exits decide where 
 
 **IPv6.** If your VPN tunnels IPv4 only, `CLAUDE_BRIDGE_IPV6=0` keeps everything on IPv4: names (DoH returns A records only) and sockets.
 
+**Browser logins.** The app settings can fix a browser. When a named account is added, the bridge automatically launches a separate browser profile (`claude-<name>` or `chatgpt-<name>`) with separate cookies and storage: Claude/Anthropic through the egress port, ChatGPT/Codex through the next port and the Codex exit. `CLAUDE_BRIDGE_BROWSER_PROFILE` remains the manual profile for other links, while `claude /login` uses the same opener through `BROWSER`. Firefox supports `resist` — a standardized fingerprint, RFP/letterboxing and normally UTC — or `exit`: language and time zone from `CLAUDE_BRIDGE_LOCALE`/`CLAUDE_BRIDGE_TZ` to match the exit. Chromium gets a separate profile, proxy, language and zone, but has no full Firefox-RFP equivalent. Localhost callbacks always bypass the proxy.
+
+**Multiple accounts.** The Accounts tab can add, log in again, activate and remove multiple Claude and ChatGPT accounts. ChatGPT OAuth sets are stored separately under `~/.claude-bridge/accounts/chatgpt/`; the old `codex-oauth.json` is the `default` profile. For Claude, the bridge does not create separate working directories: projects, history, settings, MCP, plugins and file history stay shared. Only `claudeAiOauth`, `organizationUuid` and the `oauthAccount` record are saved separately under `~/.claude-bridge/accounts/claude/` and atomically installed back into Claude Code's shared profile on activation. Close running Claude Code sessions before switching: two simultaneous sessions on different accounts are unsafe because the active shared profile owns the refresh token.
+
 **What the proxy cannot cover; do it yourself.**
-- **Browser logins** (the ChatGPT login, `claude /login`). The login page takes the browser's route; the bridge never sees it. A VPN hides only the IP: through JavaScript the page sees the browser's time zone and language (`Accept-Language`). Before logging in, turn the VPN on and set the browser's zone and language to the exit country's, ideally in a separate profile.
+- **Fingerprint and account.** A browser fingerprint cannot be removed completely: TLS/HTTP parameters and engine characteristics remain. The account also has its registration country, payment card, logins from other devices and active hours.
 - **Claude Code updates.** With `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` auto-update is off. `claude update` from a plain terminal downloads the new version from Anthropic's servers from the real address. Run it through the proxy's port: `HTTPS_PROXY=http://127.0.0.1:17871 claude update` (or from a Claude Code session, where the variable is already set).
 - **What the requests contain.** Claude Code's system prompt includes the platform, the OS version and the working directory path (and with it the user name), and git status with the commit author. Plus the language you write in. `CLAUDE_BRIDGE_TZ` and `CLAUDE_BRIDGE_LOCALE` align commit times and command output.
 - **The account.** Its country, the payment card, logins from other devices without the VPN, the hours you are active.
@@ -154,7 +158,10 @@ The settings apply immediately, no restart needed:
 | `GEO_ALLOWED_COUNTRIES` | shared list: comma-separated ISO codes (`DE,NL,SE`); `-` for none; unset means every country on the list |
 | `GEO_ALLOWED_<PROVIDER>` | a provider's own list: `GEO_ALLOWED_ANTHROPIC`, `_CODEX`, `_OPENAI`, `_OPENAI_COMPAT` |
 | `CLAUDE_BRIDGE_EXITS` | comma-separated exits: `ssh://root@203.0.113.7,socks5://127.0.0.1:1080` |
-| `CLAUDE_BRIDGE_EGRESS_PORT` | port for Claude Code's other traffic; the proxy's port + 1 by default, `0` turns it off |
+| `CLAUDE_BRIDGE_EGRESS_PORT` | port for Claude Code's other traffic and the Anthropic browser; proxy port + 1 by default, the Codex browser uses the next port; `0` turns it off |
+| `CLAUDE_BRIDGE_BROWSER` | browser for logins and links: the id selected in the UI, or a command with `%u` for the URL |
+| `CLAUDE_BRIDGE_BROWSER_PROFILE` | separate browser profile name; empty uses the normal profile without automatic proxying |
+| `CLAUDE_BRIDGE_BROWSER_FINGERPRINT` | `resist` (default): Firefox RFP/letterboxing; `exit`: bridge language and time zone aligned with the exit |
 | `CLAUDE_BRIDGE_TZ` | time zone (`TZ`) for Claude Code and the commands it runs: git commit times, `date`. `auto` is the zone of the Anthropic exit's country (`UTC` while unknown), or a name: `UTC`, `Europe/Berlin`; empty means the system one |
 | `CLAUDE_BRIDGE_LOCALE` | locale (`LANG`, `LC_ALL`) for Claude Code and the commands it runs: their output reaches the model in it. For example `en_US.UTF-8` or `C.UTF-8`; empty means the system one |
 | `CLAUDE_BRIDGE_IPV6` | `0`: IPv4 only |

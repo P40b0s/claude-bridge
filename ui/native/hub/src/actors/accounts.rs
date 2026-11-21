@@ -5,13 +5,14 @@ use async_trait::async_trait;
 use claude_bridge_core::{auth, families, usage};
 use messages::prelude::{Actor, Address, Context, Notifiable};
 use rinf::RustSignal;
+use tokio::process::Command;
 use tokio::task::{JoinHandle, JoinSet};
 
 use crate::i18n::tr;
 use crate::signals::{
-    AccountsState, AuthProvider, CancelLogin, ChatGptAccount, ClaudeCodeAccount, ErrorSeverity,
-    ErrorSignal, LoginPhase, LoginRequest, LoginState, LogoutRequest, RefreshUsage,
-    Usage, UsageReset, UsageState, UsageWindow, UseLimitReset, OpenClaudeUsage,
+    AccountsState, ActivateAccount, AuthProvider, CancelLogin, ChatGptAccount, ClaudeCodeAccount,
+    ErrorSeverity, ErrorSignal, LoginPhase, LoginRequest, LoginState, LogoutRequest,
+    OpenClaudeUsage, RefreshUsage, Usage, UsageReset, UsageState, UsageWindow, UseLimitReset,
 };
 
 /// Token expiry shown in the UI moves; resend now and then.
@@ -23,7 +24,7 @@ pub struct AccountsActor {
     /// Limits being read; a tick does not start another while one runs.
     usage: Option<JoinHandle<()>>,
     /// The browser login in progress, if any. Only one callback server can run at a time.
-    login: Option<(AuthProvider, JoinHandle<()>)>,
+    login: Option<(AuthProvider, String, JoinHandle<()>)>,
     _owned_tasks: JoinSet<()>,
 }
 
@@ -34,12 +35,20 @@ pub struct Refresh;
 /// Internal: a login task ended.
 pub struct LoginFinished {
     provider: AuthProvider,
+    profile: String,
     result: Result<String, String>,
 }
 
-fn login_state(provider: AuthProvider, phase: LoginPhase, url: Option<String>, message: Option<String>) {
+fn login_state(
+    provider: AuthProvider,
+    profile: &str,
+    phase: LoginPhase,
+    url: Option<String>,
+    message: Option<String>,
+) {
     LoginState {
         provider,
+        profile: profile.into(),
         phase,
         url,
         message,
@@ -53,6 +62,7 @@ impl AccountsActor {
         owned_tasks.spawn(super::forward::<LoginRequest, _>(self_addr.clone()));
         owned_tasks.spawn(super::forward::<CancelLogin, _>(self_addr.clone()));
         owned_tasks.spawn(super::forward::<LogoutRequest, _>(self_addr.clone()));
+        owned_tasks.spawn(super::forward::<ActivateAccount, _>(self_addr.clone()));
         owned_tasks.spawn(super::forward::<RefreshUsage, _>(self_addr.clone()));
         owned_tasks.spawn(super::forward::<UseLimitReset, _>(self_addr.clone()));
         owned_tasks.spawn(super::forward::<OpenClaudeUsage, _>(self_addr.clone()));
@@ -77,20 +87,44 @@ impl AccountsActor {
     }
 
     fn send_state() {
-        let chatgpt = auth::openai::load().map(|(t, source)| ChatGptAccount {
-            subscription_until: t.subscription_until(),
-            email: t.email,
-            plan: t.plan,
-            source: source.as_str().into(),
-            expires_at: t.expires_at,
-        });
-        let claude_code = auth::claude_code::account().map(|a| ClaudeCodeAccount {
-            email: a.email,
-            organization: a.organization,
-            plan: a.plan,
-            billing: a.billing,
-            subscription_since: a.subscription_since,
-        });
+        let mut chatgpt: Vec<_> = auth::openai::profiles()
+            .into_iter()
+            .map(|p| ChatGptAccount {
+                id: p.id,
+                active: p.active,
+                subscription_until: p.tokens.subscription_until(),
+                email: p.tokens.email,
+                plan: p.tokens.plan,
+                source: "claude-bridge".into(),
+                expires_at: p.tokens.expires_at,
+            })
+            .collect();
+        if chatgpt.is_empty()
+            && let Some((t, source)) = auth::openai::load()
+            && source == auth::openai::Source::CodexCli
+        {
+            chatgpt.push(ChatGptAccount {
+                id: "codex-cli".into(),
+                active: true,
+                subscription_until: t.subscription_until(),
+                email: t.email,
+                plan: t.plan,
+                source: source.as_str().into(),
+                expires_at: t.expires_at,
+            });
+        }
+        let claude_code = auth::claude_code::profiles()
+            .into_iter()
+            .map(|p| ClaudeCodeAccount {
+                id: p.id,
+                active: p.active,
+                email: p.account.email,
+                organization: p.account.organization,
+                plan: p.account.plan,
+                billing: p.account.billing,
+                subscription_since: p.account.subscription_since,
+            })
+            .collect();
         AccountsState {
             claude_code,
             chatgpt,
@@ -125,34 +159,101 @@ impl AccountsActor {
         }));
     }
 
-    fn start_login(&mut self, provider: AuthProvider) {
-        if let Some((_, task)) = self.login.take() {
+    fn start_login(&mut self, provider: AuthProvider, profile: String) {
+        if let Some((_, _, task)) = self.login.take() {
             task.abort();
         }
         let mut addr = self.self_addr.clone();
+        let task_profile = profile.clone();
         let task = tokio::spawn(async move {
-            let on_url = move |url: &str| {
-                auth::open_browser(url);
-                login_state(provider, LoginPhase::Waiting, Some(url.to_string()), None);
-            };
-            let result = async {
-                // The token exchange goes out the codex exit, like every other ChatGPT call.
-                let http = claude_bridge_core::exits::outside_client("codex").await?;
-                let who = match provider {
-                    AuthProvider::ChatGpt => auth::openai::login(&http, on_url).await?.email,
-                };
-                anyhow::Ok(
-                    who.unwrap_or_else(|| tr("неизвестный аккаунт", "unknown account").into()),
-                )
+            let result = match provider {
+                AuthProvider::ChatGpt => login_chatgpt(provider, &task_profile).await,
+                AuthProvider::Claude => login_claude(&task_profile).await,
             }
-            .await
             .map_err(|e| format!("{e:#}"));
             let _ = addr
-                .notify(LoginFinished { provider, result })
+                .notify(LoginFinished {
+                    provider,
+                    profile: task_profile,
+                    result,
+                })
                 .await;
         });
-        self.login = Some((provider, task));
+        self.login = Some((provider, profile, task));
     }
+}
+
+async fn login_chatgpt(provider: AuthProvider, profile: &str) -> anyhow::Result<String> {
+    auth::profiles::validate(profile)?;
+    let http = claude_bridge_core::exits::outside_client("codex").await?;
+    let browser_profile = format!("chatgpt-{profile}");
+    let on_url = move |url: &str| {
+        if let Err(e) =
+            claude_bridge_core::browser::open_with_profile(url, "codex", Some(&browser_profile))
+        {
+            ErrorSignal::error(&e);
+        }
+        login_state(
+            provider,
+            profile,
+            LoginPhase::Waiting,
+            Some(url.to_string()),
+            None,
+        );
+    };
+    let tokens = auth::openai::login_profile(&http, profile, on_url).await?;
+    Ok(tokens
+        .email
+        .unwrap_or_else(|| tr("неизвестный аккаунт", "unknown account").into()))
+}
+
+struct RestoreClaudeLogin(Option<String>);
+
+impl Drop for RestoreClaudeLogin {
+    fn drop(&mut self) {
+        if let Some(previous) = self.0.take() {
+            let _ = auth::claude_code::restore_after_failed_login(Some(&previous));
+        }
+    }
+}
+
+async fn login_claude(profile: &str) -> anyhow::Result<String> {
+    auth::profiles::validate(profile)?;
+    let mut restore = RestoreClaudeLogin(auth::claude_code::prepare_login()?);
+    login_state(
+        AuthProvider::Claude,
+        profile,
+        LoginPhase::Waiting,
+        None,
+        None,
+    );
+    let mut command = Command::new("claude");
+    command.kill_on_drop(true).args(["auth", "login"]);
+    for (key, value) in claude_bridge_core::claude_settings::managed_env() {
+        command.env(key, value);
+    }
+    command.env(
+        claude_bridge_core::browser::PROFILE_OVERRIDE_KEY,
+        format!("claude-{profile}"),
+    );
+    let output = command.output().await;
+    let result = match output {
+        Ok(output) if output.status.success() => auth::claude_code::finish_login(profile),
+        Ok(output) => {
+            let error = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            Err(anyhow::anyhow!(if error.is_empty() {
+                format!("claude auth login exited with {}", output.status)
+            } else {
+                error
+            }))
+        }
+        Err(e) => Err(anyhow::Error::new(e).context("starting `claude auth login`")),
+    };
+    result?;
+    restore.0 = None;
+    Ok(auth::claude_code::account()
+        .and_then(|a| a.email)
+        .unwrap_or_else(|| tr("неизвестный аккаунт", "unknown account").into()))
 }
 
 #[async_trait]
@@ -175,7 +276,14 @@ const CLAUDE_USAGE_PAGE: &str = "https://claude.ai/settings/usage";
 #[async_trait]
 impl Notifiable<OpenClaudeUsage> for AccountsActor {
     async fn notify(&mut self, _: OpenClaudeUsage, _: &Context<Self>) {
-        auth::open_browser(CLAUDE_USAGE_PAGE);
+        let profile = format!("claude-{}", auth::claude_code::active_profile());
+        if let Err(e) = claude_bridge_core::browser::open_with_profile(
+            CLAUDE_USAGE_PAGE,
+            "anthropic",
+            Some(&profile),
+        ) {
+            ErrorSignal::error(&e);
+        }
     }
 }
 
@@ -208,7 +316,10 @@ impl Notifiable<UseLimitReset> for AccountsActor {
                 ),
                 Ok(usage::ResetOutcome::NoCredit) => ErrorSignal::send(
                     ErrorSeverity::Warning,
-                    tr("Этого сброса больше нет", "This reset is no longer available"),
+                    tr(
+                        "Этого сброса больше нет",
+                        "This reset is no longer available",
+                    ),
                 ),
                 Ok(usage::ResetOutcome::AlreadyRedeemed) => ErrorSignal::send(
                     ErrorSeverity::Warning,
@@ -216,7 +327,10 @@ impl Notifiable<UseLimitReset> for AccountsActor {
                 ),
                 Ok(usage::ResetOutcome::Other(reply)) => ErrorSignal::send(
                     ErrorSeverity::Warning,
-                    format!("{}: {reply}", tr("Непонятный ответ на сброс", "Unexpected reset reply")),
+                    format!(
+                        "{}: {reply}",
+                        tr("Непонятный ответ на сброс", "Unexpected reset reply")
+                    ),
                 ),
                 Err(e) => ErrorSignal::send(
                     ErrorSeverity::Error,
@@ -231,16 +345,16 @@ impl Notifiable<UseLimitReset> for AccountsActor {
 #[async_trait]
 impl Notifiable<LoginRequest> for AccountsActor {
     async fn notify(&mut self, msg: LoginRequest, _: &Context<Self>) {
-        self.start_login(msg.provider);
+        self.start_login(msg.provider, msg.profile);
     }
 }
 
 #[async_trait]
 impl Notifiable<CancelLogin> for AccountsActor {
     async fn notify(&mut self, _: CancelLogin, _: &Context<Self>) {
-        if let Some((provider, task)) = self.login.take() {
+        if let Some((provider, profile, task)) = self.login.take() {
             task.abort();
-            login_state(provider, LoginPhase::Cancelled, None, None);
+            login_state(provider, &profile, LoginPhase::Cancelled, None, None);
         }
     }
 }
@@ -251,14 +365,26 @@ impl Notifiable<LoginFinished> for AccountsActor {
         self.login = None;
         match msg.result {
             Ok(who) => {
-                login_state(msg.provider, LoginPhase::Succeeded, None, Some(who.clone()));
+                login_state(
+                    msg.provider,
+                    &msg.profile,
+                    LoginPhase::Succeeded,
+                    None,
+                    Some(who.clone()),
+                );
                 ErrorSignal::send(
                     ErrorSeverity::Success,
                     format!("{}: {who}", tr("Вход выполнен", "Logged in")),
                 );
             }
             Err(e) => {
-                login_state(msg.provider, LoginPhase::Failed, None, Some(e.clone()));
+                login_state(
+                    msg.provider,
+                    &msg.profile,
+                    LoginPhase::Failed,
+                    None,
+                    Some(e.clone()),
+                );
                 ErrorSignal::send(
                     ErrorSeverity::Error,
                     format!("{}: {e}", tr("Вход не удался", "Login failed")),
@@ -273,19 +399,65 @@ impl Notifiable<LoginFinished> for AccountsActor {
 #[async_trait]
 impl Notifiable<LogoutRequest> for AccountsActor {
     async fn notify(&mut self, msg: LogoutRequest, _: &Context<Self>) {
-        let removed = match msg.provider {
-            AuthProvider::ChatGpt => auth::openai::logout(),
+        let result = match msg.provider {
+            AuthProvider::ChatGpt if msg.profile == "codex-cli" => {
+                ErrorSignal::send(
+                    ErrorSeverity::Warning,
+                    tr(
+                        "Используются токены Codex CLI (~/.codex/auth.json); выйдите через `codex logout`",
+                        "These are Codex CLI tokens (~/.codex/auth.json); log out with `codex logout`",
+                    ),
+                );
+                Ok(false)
+            }
+            AuthProvider::ChatGpt => auth::openai::logout_profile(&msg.profile),
+            AuthProvider::Claude if auth::claude_code::active_profile() == msg.profile => {
+                let output = Command::new("claude")
+                    .args(["auth", "logout"])
+                    .output()
+                    .await;
+                match output {
+                    Ok(output) if output.status.success() => {
+                        auth::claude_code::clear_active(&msg.profile).map(|_| true)
+                    }
+                    Ok(output) => Err(anyhow::anyhow!(
+                        String::from_utf8_lossy(&output.stderr).trim().to_string()
+                    )),
+                    Err(e) => Err(anyhow::Error::new(e).context("starting `claude auth logout`")),
+                }
+            }
+            AuthProvider::Claude => auth::claude_code::remove(&msg.profile),
         };
-        if !removed && msg.provider == AuthProvider::ChatGpt && auth::openai::load().is_some() {
-            ErrorSignal::send(
-                ErrorSeverity::Warning,
-                tr(
-                    "Используются токены Codex CLI (~/.codex/auth.json); выйдите через `codex logout`",
-                    "These are Codex CLI tokens (~/.codex/auth.json); log out with `codex logout`",
-                ),
-            );
+        if let Err(e) = result {
+            ErrorSignal::error(&e);
         }
         Self::send_state();
+    }
+}
+
+#[async_trait]
+impl Notifiable<ActivateAccount> for AccountsActor {
+    async fn notify(&mut self, msg: ActivateAccount, _: &Context<Self>) {
+        let result = match msg.provider {
+            AuthProvider::Claude => auth::claude_code::activate(&msg.profile),
+            AuthProvider::ChatGpt if msg.profile == "codex-cli" => Err(anyhow::anyhow!(
+                "Codex CLI fallback is active only when no claude-bridge ChatGPT profile is selected"
+            )),
+            AuthProvider::ChatGpt => auth::openai::activate(&msg.profile),
+        };
+        match result {
+            Ok(()) => ErrorSignal::send(
+                ErrorSeverity::Success,
+                format!(
+                    "{}: {}",
+                    tr("Аккаунт активирован", "Account activated"),
+                    msg.profile
+                ),
+            ),
+            Err(e) => ErrorSignal::error(&e),
+        }
+        Self::send_state();
+        self.refresh_usage();
     }
 }
 
@@ -308,7 +480,11 @@ fn usage_signal(u: usage::Usage) -> Usage {
         resets: u
             .resets
             .into_iter()
-            .map(|r| UsageReset { id: r.id, title: r.title, expires_at: r.expires_at })
+            .map(|r| UsageReset {
+                id: r.id,
+                title: r.title,
+                expires_at: r.expires_at,
+            })
             .collect(),
     }
 }

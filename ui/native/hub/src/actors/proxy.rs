@@ -317,7 +317,9 @@ impl Refusals {
     const FRESH_MS: i64 = 60_000;
 
     fn check(&mut self, record: &claude_bridge_core::request_log::RequestRecord) {
-        let Some(error) = record.error.as_deref() else { return };
+        let Some(error) = record.error.as_deref() else {
+            return;
+        };
         let geo = record.http_status == Some(451);
         if !geo && !error.starts_with("request not sent") {
             return;
@@ -326,14 +328,24 @@ impl Refusals {
         if now - record.started_at > Self::FRESH_MS {
             return;
         }
-        if self.shown.get(error).is_some_and(|at| now - at < Self::REPEAT_MS) {
+        if self
+            .shown
+            .get(error)
+            .is_some_and(|at| now - at < Self::REPEAT_MS)
+        {
             return;
         }
         self.shown.insert(error.to_string(), now);
         let title = if geo {
-            tr("Запрос отклонён: страна не разрешена", "Request refused: country not allowed")
+            tr(
+                "Запрос отклонён: страна не разрешена",
+                "Request refused: country not allowed",
+            )
         } else {
-            tr("Запрос отклонён: выход недоступен", "Request refused: exit unavailable")
+            tr(
+                "Запрос отклонён: выход недоступен",
+                "Request refused: exit unavailable",
+            )
         };
         let provider = record.provider.as_deref().unwrap_or(&record.requested);
         let body = format!("{provider}: {error}");

@@ -2,6 +2,7 @@
 
 pub mod claude_code;
 pub mod openai;
+pub mod profiles;
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -29,7 +30,10 @@ pub const REFRESH_SKEW_MS: i64 = 5 * 60 * 1000;
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 
 pub fn now_ms() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 pub fn random_urlsafe(bytes: usize) -> String {
@@ -53,7 +57,10 @@ impl Pkce {
     pub fn new() -> Self {
         let verifier = random_urlsafe(32);
         let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
-        Self { verifier, challenge }
+        Self {
+            verifier,
+            challenge,
+        }
     }
 }
 
@@ -82,7 +89,9 @@ pub fn write_secret_json<T: Serialize>(path: &Path, value: &T) -> anyhow::Result
         opts.write(true).create(true).truncate(true);
         #[cfg(unix)]
         std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
-        let mut file = opts.open(&tmp).with_context(|| format!("writing {}", tmp.display()))?;
+        let mut file = opts
+            .open(&tmp)
+            .with_context(|| format!("writing {}", tmp.display()))?;
         file.write_all(&data)?;
     }
     std::fs::rename(&tmp, path).with_context(|| format!("writing {}", path.display()))?;
@@ -93,17 +102,18 @@ pub fn remove_file(path: &Path) -> bool {
     std::fs::remove_file(path).is_ok()
 }
 
-pub fn open_browser(url: &str) {
-    let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
-    let _ = std::process::Command::new(opener)
-        .arg(url)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
+/// Opens `url` in the browser from `CLAUDE_BRIDGE_BROWSER`, through `family` when an isolated
+/// profile is configured.
+pub fn open_browser(url: &str, family: &str) -> anyhow::Result<()> {
+    crate::browser::open(url, family)
 }
 
 /// Serves `path` on every listener until the provider redirects back with `code`, then shuts down.
-pub async fn wait_for_code(listeners: Vec<TcpListener>, path: &str, expected_state: String) -> anyhow::Result<String> {
+pub async fn wait_for_code(
+    listeners: Vec<TcpListener>,
+    path: &str,
+    expected_state: String,
+) -> anyhow::Result<String> {
     let (tx, rx) = oneshot::channel::<Result<String, String>>();
     let tx = Arc::new(Mutex::new(Some(tx)));
     let app = Router::new().route(
@@ -143,7 +153,9 @@ pub async fn wait_for_code(listeners: Vec<TcpListener>, path: &str, expected_sta
                 let app = app.clone();
                 let shutdown = shutdown.clone();
                 tokio::spawn(async move {
-                    let _ = axum::serve(listener, app).with_graceful_shutdown(async move { shutdown.notified().await }).await;
+                    let _ = axum::serve(listener, app)
+                        .with_graceful_shutdown(async move { shutdown.notified().await })
+                        .await;
                 })
             })
             .collect(),
@@ -152,7 +164,11 @@ pub async fn wait_for_code(listeners: Vec<TcpListener>, path: &str, expected_sta
     let outcome = tokio::time::timeout(LOGIN_TIMEOUT, rx).await;
     shutdown.notify_waiters();
     // Let the browser get its response; if the login is cancelled instead, dropping the guard frees the port.
-    let _ = tokio::time::timeout(Duration::from_secs(2), futures_util::future::join_all(servers.0.iter_mut())).await;
+    let _ = tokio::time::timeout(
+        Duration::from_secs(2),
+        futures_util::future::join_all(servers.0.iter_mut()),
+    )
+    .await;
     match outcome {
         Err(_) => bail!("timed out waiting for the browser login"),
         Ok(Err(_)) => bail!("login callback server stopped unexpectedly"),
@@ -173,5 +189,7 @@ impl Drop for AbortOnDrop {
 
 pub fn print_login_url(url: &str) {
     eprintln!("  Opening browser for login. If it does not open, visit:\n\n  {url}\n");
-    open_browser(url);
+    if let Err(e) = open_browser(url, "codex") {
+        eprintln!("  Warning: {e:#}\n");
+    }
 }

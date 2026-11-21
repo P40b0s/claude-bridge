@@ -10,7 +10,7 @@ use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 use tracing::info;
 
-use super::{REFRESH_SKEW_MS, jwt_claims, now_ms, read_json, write_secret_json};
+use super::{REFRESH_SKEW_MS, jwt_claims, now_ms, profiles, read_json, write_secret_json};
 use crate::config;
 use crate::error::ProxyError;
 
@@ -54,8 +54,66 @@ impl Source {
     }
 }
 
+fn profile_file(profile: &str) -> anyhow::Result<PathBuf> {
+    let profile = profiles::validate(profile)?;
+    if profile == profiles::DEFAULT_PROFILE {
+        Ok(config::data_dir().join("codex-oauth.json"))
+    } else {
+        Ok(profiles::dir("chatgpt").join(format!("{profile}.json")))
+    }
+}
+
 fn bridge_file() -> PathBuf {
-    config::data_dir().join("codex-oauth.json")
+    profile_file(&active_profile()).unwrap_or_else(|_| config::data_dir().join("codex-oauth.json"))
+}
+
+pub struct AccountProfile {
+    pub id: String,
+    pub tokens: CodexTokens,
+    pub active: bool,
+}
+
+pub fn active_profile() -> String {
+    profiles::active(profiles::CHATGPT_ACTIVE_KEY)
+}
+
+pub fn profiles() -> Vec<AccountProfile> {
+    let active = active_profile();
+    let mut ids = vec![profiles::DEFAULT_PROFILE.to_string()];
+    if let Ok(entries) = std::fs::read_dir(profiles::dir("chatgpt")) {
+        ids.extend(entries.flatten().filter_map(|entry| {
+            let path = entry.path();
+            (path.extension().and_then(|e| e.to_str()) == Some("json"))
+                .then(|| path.file_stem()?.to_str().map(String::from))
+                .flatten()
+        }));
+    }
+    ids.sort();
+    ids.dedup();
+    let mut result: Vec<_> = ids
+        .into_iter()
+        .filter_map(|id| {
+            let tokens = read_json::<CodexTokens>(&profile_file(&id).ok()?)?;
+            (!tokens.access_token.is_empty() && !tokens.refresh_token.is_empty()).then_some(
+                AccountProfile {
+                    active: id == active,
+                    id,
+                    tokens,
+                },
+            )
+        })
+        .collect();
+    result.sort_by(|a, b| b.active.cmp(&a.active).then_with(|| a.id.cmp(&b.id)));
+    result
+}
+
+pub fn activate(profile: &str) -> anyhow::Result<()> {
+    let profile = profiles::validate(profile)?;
+    anyhow::ensure!(
+        profile_file(profile)?.is_file(),
+        "ChatGPT account '{profile}' is not saved"
+    );
+    profiles::set_active(profiles::CHATGPT_ACTIVE_KEY, Some(profile))
 }
 
 fn codex_cli_file() -> PathBuf {
@@ -66,11 +124,17 @@ impl CodexTokens {
     /// When the paid ChatGPT plan ends (Unix ms), from the ID token; None on the free plan.
     pub fn subscription_until(&self) -> Option<i64> {
         let claims = jwt_claims(self.id_token.as_deref()?)?;
-        let until = claims["https://api.openai.com/auth"]["chatgpt_subscription_active_until"].as_str()?;
+        let until =
+            claims["https://api.openai.com/auth"]["chatgpt_subscription_active_until"].as_str()?;
         crate::usage::parse_rfc3339_ms(until)
     }
 
-    fn from_token_response(access_token: String, refresh_token: String, id_token: Option<String>, expires_in: Option<i64>) -> Self {
+    fn from_token_response(
+        access_token: String,
+        refresh_token: String,
+        id_token: Option<String>,
+        expires_in: Option<i64>,
+    ) -> Self {
         let access = jwt_claims(&access_token);
         let id = id_token.as_deref().and_then(jwt_claims);
         let auth = access.as_ref().map(|c| &c["https://api.openai.com/auth"]);
@@ -82,13 +146,21 @@ impl CodexTokens {
         let email = id
             .as_ref()
             .and_then(|c| c["email"].as_str())
-            .or_else(|| access.as_ref().and_then(|c| c["https://api.openai.com/profile"]["email"].as_str()))
+            .or_else(|| {
+                access
+                    .as_ref()
+                    .and_then(|c| c["https://api.openai.com/profile"]["email"].as_str())
+            })
             .map(String::from);
         Self {
             expires_at,
             email,
-            plan: auth.and_then(|a| a["chatgpt_plan_type"].as_str()).map(String::from),
-            account_id: auth.and_then(|a| a["chatgpt_account_id"].as_str()).map(String::from),
+            plan: auth
+                .and_then(|a| a["chatgpt_plan_type"].as_str())
+                .map(String::from),
+            account_id: auth
+                .and_then(|a| a["chatgpt_account_id"].as_str())
+                .map(String::from),
             access_token,
             refresh_token,
             id_token,
@@ -138,7 +210,21 @@ fn save(tokens: &CodexTokens, source: Source) -> anyhow::Result<()> {
 }
 
 pub fn logout() -> bool {
-    super::remove_file(&bridge_file())
+    logout_profile(&active_profile()).unwrap_or(false)
+}
+
+pub fn logout_profile(profile: &str) -> anyhow::Result<bool> {
+    let profile = profiles::validate(profile)?;
+    let was_active = active_profile() == profile;
+    let removed = super::remove_file(&profile_file(profile)?);
+    if was_active {
+        let next = profiles()
+            .into_iter()
+            .find(|p| p.id != profile)
+            .map(|p| p.id);
+        profiles::set_active(profiles::CHATGPT_ACTIVE_KEY, next.as_deref())?;
+    }
+    Ok(removed)
 }
 
 #[derive(Deserialize)]
@@ -168,7 +254,9 @@ impl OpenAiAuth {
     pub async fn credentials(&self, http: &reqwest::Client) -> Result<Credentials, ProxyError> {
         let _guard = self.lock.lock().await;
         let (mut tokens, source) = load().ok_or_else(|| {
-            ProxyError::unauthorized("Not logged in to ChatGPT. Run `claude-bridge login codex` (or `codex login`).")
+            ProxyError::unauthorized(
+                "Not logged in to ChatGPT. Run `claude-bridge login codex` (or `codex login`).",
+            )
         })?;
 
         if now_ms() > tokens.expires_at - REFRESH_SKEW_MS {
@@ -202,16 +290,32 @@ impl OpenAiAuth {
             refreshed.plan = refreshed.plan.or(tokens.plan);
             refreshed.account_id = refreshed.account_id.or(tokens.account_id);
             tokens = refreshed;
-            save(&tokens, source).map_err(|e| ProxyError::internal(format!("saving refreshed token: {e:#}")))?;
+            save(&tokens, source)
+                .map_err(|e| ProxyError::internal(format!("saving refreshed token: {e:#}")))?;
         }
 
-        Ok(Credentials { access_token: tokens.access_token, account_id: tokens.account_id })
+        Ok(Credentials {
+            access_token: tokens.access_token,
+            account_id: tokens.account_id,
+        })
     }
 }
 
 /// Browser PKCE login with a loopback callback on the port the Codex client allows.
 /// `on_url` gets the authorization URL and is expected to open it.
-pub async fn login(http: &reqwest::Client, on_url: impl FnOnce(&str)) -> anyhow::Result<CodexTokens> {
+pub async fn login(
+    http: &reqwest::Client,
+    on_url: impl FnOnce(&str),
+) -> anyhow::Result<CodexTokens> {
+    login_profile(http, profiles::DEFAULT_PROFILE, on_url).await
+}
+
+pub async fn login_profile(
+    http: &reqwest::Client,
+    profile: &str,
+    on_url: impl FnOnce(&str),
+) -> anyhow::Result<CodexTokens> {
+    let profile = profiles::validate(profile)?.to_string();
     let mut listeners = vec![
         TcpListener::bind(("127.0.0.1", CALLBACK_PORT))
             .await
@@ -254,13 +358,18 @@ pub async fn login(http: &reqwest::Client, on_url: impl FnOnce(&str)) -> anyhow:
         .await?;
     if !resp.status().is_success() {
         let status = resp.status();
-        bail!("token exchange failed ({status}): {}", resp.text().await.unwrap_or_default());
+        bail!(
+            "token exchange failed ({status}): {}",
+            resp.text().await.unwrap_or_default()
+        );
     }
     let r: TokenResponse = resp.json().await?;
     let Some(refresh_token) = r.refresh_token else {
         bail!("token response has no refresh_token");
     };
-    let tokens = CodexTokens::from_token_response(r.access_token, refresh_token, r.id_token, r.expires_in);
-    write_secret_json(&bridge_file(), &tokens)?;
+    let tokens =
+        CodexTokens::from_token_response(r.access_token, refresh_token, r.id_token, r.expires_in);
+    write_secret_json(&profile_file(&profile)?, &tokens)?;
+    profiles::set_active(profiles::CHATGPT_ACTIVE_KEY, Some(&profile))?;
     Ok(tokens)
 }

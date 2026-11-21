@@ -79,7 +79,11 @@ impl Tracker {
     /// Passthrough replies are piped untouched, so only the status is known.
     pub fn passed_through(self, status: u16) -> RequestRecord {
         let ok = (200..300).contains(&status);
-        let mut r = self.done(if ok { RequestStatus::Ok } else { RequestStatus::Error });
+        let mut r = self.done(if ok {
+            RequestStatus::Ok
+        } else {
+            RequestStatus::Error
+        });
         r.http_status = Some(status);
         r
     }
@@ -104,7 +108,11 @@ pub struct RequestLog {
 
 impl Default for RequestLog {
     fn default() -> Self {
-        Self { next_id: AtomicU64::new(1), recent: Mutex::new(VecDeque::new()), tx: broadcast::channel(256).0 }
+        Self {
+            next_id: AtomicU64::new(1),
+            recent: Mutex::new(VecDeque::new()),
+            tx: broadcast::channel(256).0,
+        }
     }
 }
 
@@ -126,7 +134,10 @@ impl RequestLog {
             error: None,
             retry_at: None,
         };
-        Tracker { record, started: Instant::now() }
+        Tracker {
+            record,
+            started: Instant::now(),
+        }
     }
 
     /// Publishes a running request; the same id is published again when it finishes.
@@ -135,7 +146,9 @@ impl RequestLog {
     }
 
     pub fn publish(&self, record: RequestRecord) {
-        if let (Some(usage), Some(provider), Some(model)) = (&record.usage, &record.provider, &record.model) {
+        if let (Some(usage), Some(provider), Some(model)) =
+            (&record.usage, &record.provider, &record.model)
+        {
             crate::stats::record(provider, model, usage);
         }
         {
@@ -158,7 +171,9 @@ impl RequestLog {
     pub fn set_usage(&self, id: u64, usage: Usage) {
         let record = {
             let mut recent = self.recent.lock().unwrap();
-            let Some(record) = recent.iter_mut().find(|r| r.id == id) else { return };
+            let Some(record) = recent.iter_mut().find(|r| r.id == id) else {
+                return;
+            };
             if record.usage.is_none()
                 && let (Some(provider), Some(model)) = (&record.provider, &record.model)
             {

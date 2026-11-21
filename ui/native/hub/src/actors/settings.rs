@@ -1,14 +1,14 @@
 use std::collections::BTreeMap;
 
 use async_trait::async_trait;
-use claude_bridge_core::{config, families, routing, settings};
+use claude_bridge_core::{browser, config, families, routing, settings};
 use messages::prelude::{Actor, Address, Context, Notifiable};
 use rinf::RustSignal;
 use tokio::task::JoinSet;
 
 use crate::configuration::KNOWN_KEYS;
 use crate::i18n::{self, tr};
-use crate::signals::{ErrorSeverity, ErrorSignal, SaveSettings, SettingsState};
+use crate::signals::{BrowserInfo, ErrorSeverity, ErrorSignal, SaveSettings, SettingsState};
 
 /// The .env settings file and UI choices.
 pub struct SettingsActor {
@@ -21,6 +21,9 @@ impl Actor for SettingsActor {}
 const UI_ONLY_KEYS: &[&str] = &[
     "CLAUDE_BRIDGE_AUTOSTART",
     "CLAUDE_BRIDGE_BIN",
+    browser::KEY,
+    browser::PROFILE_KEY,
+    browser::FINGERPRINT_KEY,
     families::DISABLED_KEY,
     i18n::LANG_KEY,
 ];
@@ -49,6 +52,13 @@ impl SettingsActor {
             efforts: routing::EFFORTS
                 .iter()
                 .map(|r| r.as_str().to_string())
+                .collect(),
+            browsers: browser::installed()
+                .into_iter()
+                .map(|b| BrowserInfo {
+                    id: b.id,
+                    name: b.name,
+                })
                 .collect(),
         }
         .send_signal_to_dart();

@@ -71,12 +71,19 @@ fn path() -> std::path::PathBuf {
 
 /// The Anthropic exit's country as last seen.
 pub fn remembered() -> Option<String> {
-    std::fs::read_to_string(path()).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+    std::fs::read_to_string(path())
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 /// What `auto` turns into.
 pub fn auto() -> String {
-    remembered().as_deref().and_then(for_country).unwrap_or("UTC").to_string()
+    remembered()
+        .as_deref()
+        .and_then(for_country)
+        .unwrap_or("UTC")
+        .to_string()
 }
 
 fn wanted() -> bool {
@@ -109,7 +116,8 @@ pub async fn watch(state: Arc<server::AppState>) {
     loop {
         if wanted() {
             match state.exits.for_family(FAMILY).await {
-                Ok((_, client)) => match geo::locate(&client, &server::family_origin(FAMILY)).await {
+                Ok((_, client)) => match geo::locate(&client, &server::family_origin(FAMILY)).await
+                {
                     Ok(location) => remember(&location),
                     Err(e) => debug!("time zone: exit country unknown: {e:#}"),
                 },

@@ -3,6 +3,7 @@
 
 pub mod anthropic;
 pub mod auth;
+pub mod browser;
 pub mod claude_settings;
 pub mod config;
 pub mod control;
@@ -20,6 +21,6 @@ pub mod request_log;
 pub mod routing;
 pub mod server;
 pub mod settings;
+pub mod stats;
 pub mod usage;
 pub mod zone;
-pub mod stats;

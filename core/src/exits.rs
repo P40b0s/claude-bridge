@@ -38,7 +38,10 @@ const STDERR_LINES: usize = 6;
 
 /// `CLAUDE_BRIDGE_EXIT_OPENAI_COMPAT` for `openai-compat`.
 pub fn route_key(family: &str) -> String {
-    format!("{ROUTE_PREFIX}{}", family.to_ascii_uppercase().replace('-', "_"))
+    format!(
+        "{ROUTE_PREFIX}{}",
+        family.to_ascii_uppercase().replace('-', "_")
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -46,7 +49,11 @@ pub enum Exit {
     Direct,
     /// `socks5://`, `socks5h://`, `http://` or `https://` proxy URL, credentials included.
     Proxy(String),
-    Ssh { user: Option<String>, host: String, port: Option<u16> },
+    Ssh {
+        user: Option<String>,
+        host: String,
+        port: Option<u16>,
+    },
 }
 
 impl Exit {
@@ -56,15 +63,25 @@ impl Exit {
             return Ok(Exit::Direct);
         }
         let url = url::Url::parse(spec).map_err(|e| anyhow::anyhow!("bad exit {spec:?}: {e}"))?;
-        let host = url.host_str().filter(|h| !h.is_empty()).ok_or_else(|| anyhow::anyhow!("exit {spec:?} has no host"))?;
+        let host = url
+            .host_str()
+            .filter(|h| !h.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("exit {spec:?} has no host"))?;
         match url.scheme() {
             "ssh" => Ok(Exit::Ssh {
-                user: Some(url.username()).filter(|u| !u.is_empty()).map(String::from),
-                host: host.trim_start_matches('[').trim_end_matches(']').to_string(),
+                user: Some(url.username())
+                    .filter(|u| !u.is_empty())
+                    .map(String::from),
+                host: host
+                    .trim_start_matches('[')
+                    .trim_end_matches(']')
+                    .to_string(),
                 port: url.port(),
             }),
             "socks5" | "socks5h" | "http" | "https" => Ok(Exit::Proxy(spec.to_string())),
-            other => anyhow::bail!("exit {spec:?}: unsupported scheme {other} (ssh, socks5, socks5h, http, https)"),
+            other => anyhow::bail!(
+                "exit {spec:?}: unsupported scheme {other} (ssh, socks5, socks5h, http, https)"
+            ),
         }
     }
 
@@ -75,7 +92,11 @@ impl Exit {
             Exit::Proxy(url) => url.clone(),
             Exit::Ssh { user, host, port } => {
                 let user = user.as_ref().map(|u| format!("{u}@")).unwrap_or_default();
-                let host = if host.contains(':') { format!("[{host}]") } else { host.clone() };
+                let host = if host.contains(':') {
+                    format!("[{host}]")
+                } else {
+                    host.clone()
+                };
                 let port = port.map(|p| format!(":{p}")).unwrap_or_default();
                 format!("ssh://{user}{host}{port}")
             }
@@ -98,7 +119,10 @@ impl Exit {
 }
 
 fn setting(file: &std::collections::BTreeMap<String, String>, key: &str) -> Option<String> {
-    file.get(key).cloned().filter(|v| !v.trim().is_empty()).or_else(|| config::env(key))
+    file.get(key)
+        .cloned()
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| config::env(key))
 }
 
 /// The exits listed in the settings, in order, without duplicates. Bad entries are skipped.
@@ -150,14 +174,25 @@ pub struct Exits {
 
 impl Exits {
     pub fn new(direct: reqwest::Client) -> Self {
-        Self { direct, proxies: Default::default(), tunnels: Default::default() }
+        Self {
+            direct,
+            proxies: Default::default(),
+            tunnels: Default::default(),
+        }
     }
 
     /// The client for a provider family's configured exit, starting its SSH tunnel if needed.
     pub async fn for_family(&self, family: &str) -> Result<(Exit, reqwest::Client), ProxyError> {
-        let exit = configured(family).map_err(|e| ProxyError::bad_request(format!("{family}: {e:#}")))?;
+        let exit =
+            configured(family).map_err(|e| ProxyError::bad_request(format!("{family}: {e:#}")))?;
         let client = self.client(&exit).await.map_err(|e| {
-            ProxyError::new(StatusCode::BAD_GATEWAY, format!("request not sent: exit {} for {family} is unavailable: {e:#}", exit.label()))
+            ProxyError::new(
+                StatusCode::BAD_GATEWAY,
+                format!(
+                    "request not sent: exit {} for {family} is unavailable: {e:#}",
+                    exit.label()
+                ),
+            )
         })?;
         Ok((exit, client))
     }
@@ -182,8 +217,12 @@ impl Exits {
         let spec = exit.spec();
         let mut tunnels = self.tunnels.lock().await;
         // Close tunnels nothing points at any more.
-        let in_use: Vec<String> =
-            FAMILIES.iter().filter_map(|f| configured(f).ok()).chain(listed()).map(|e| e.spec()).collect();
+        let in_use: Vec<String> = FAMILIES
+            .iter()
+            .filter_map(|f| configured(f).ok())
+            .chain(listed())
+            .map(|e| e.spec())
+            .collect();
         tunnels.retain(|key, _| key == &spec || in_use.contains(key));
 
         if let Some(tunnel) = tunnels.get_mut(&spec) {
@@ -204,10 +243,17 @@ impl Exits {
 
     /// Starts (or reuses) the tunnel for an SSH exit and returns its local SOCKS5 port.
     pub async fn tunnel_port(&self, exit: &Exit) -> anyhow::Result<u16> {
-        anyhow::ensure!(matches!(exit, Exit::Ssh { .. }), "{} is not an SSH exit", exit.label());
+        anyhow::ensure!(
+            matches!(exit, Exit::Ssh { .. }),
+            "{} is not an SSH exit",
+            exit.label()
+        );
         self.tunnel(exit).await?;
         let tunnels = self.tunnels.lock().await;
-        tunnels.get(&exit.spec()).map(|t| t.port).ok_or_else(|| anyhow::anyhow!("tunnel {} closed", exit.label()))
+        tunnels
+            .get(&exit.spec())
+            .map(|t| t.port)
+            .ok_or_else(|| anyhow::anyhow!("tunnel {} closed", exit.label()))
     }
 
     pub async fn tunnels(&self) -> Vec<TunnelStatus> {
@@ -216,7 +262,11 @@ impl Exits {
             .iter_mut()
             .map(|(exit, t)| {
                 let running = matches!(t.child.try_wait(), Ok(None));
-                TunnelStatus { exit: exit.clone(), running, port: running.then_some(t.port) }
+                TunnelStatus {
+                    exit: exit.clone(),
+                    running,
+                    port: running.then_some(t.port),
+                }
             })
             .collect()
     }
@@ -228,7 +278,9 @@ impl Exits {
 /// than going direct.
 pub async fn outside_client(family: &str) -> anyhow::Result<reqwest::Client> {
     let client = outside_client_unchecked(family).await?;
-    geo::check(&client, family, &crate::server::family_origin(family)).await.map_err(|e| anyhow::anyhow!(e.message))?;
+    geo::check(&client, family, &crate::server::family_origin(family))
+        .await
+        .map_err(|e| anyhow::anyhow!(e.message))?;
     Ok(client)
 }
 
@@ -241,7 +293,12 @@ pub async fn outside_client_unchecked(family: &str) -> anyhow::Result<reqwest::C
         Exit::Ssh { .. } => {
             let port = crate::control::tunnel_port(config::port(), &exit.spec())
                 .await
-                .map_err(|e| anyhow::anyhow!("{family} goes through {}, whose SSH tunnel runs in the proxy: {e:#}", exit.label()))?;
+                .map_err(|e| {
+                    anyhow::anyhow!(
+                        "{family} goes through {}, whose SSH tunnel runs in the proxy: {e:#}",
+                        exit.label()
+                    )
+                })?;
             proxied_client(&format!("socks5h://127.0.0.1:{port}"))?
         }
     };
@@ -261,7 +318,11 @@ pub fn client_builder() -> reqwest::ClientBuilder {
     if !crate::dns::ipv6_enabled() {
         builder = builder.local_address(std::net::IpAddr::from([0, 0, 0, 0]));
     }
-    if crate::dns::doh_enabled() { builder.dns_resolver(crate::dns::DohResolver(crate::dns::Doh::global())) } else { builder }
+    if crate::dns::doh_enabled() {
+        builder.dns_resolver(crate::dns::DohResolver(crate::dns::Doh::global()))
+    } else {
+        builder
+    }
 }
 
 /// `ssh` without a console window: on Windows the proxy runs detached, and a console program it
@@ -302,21 +363,42 @@ async fn ssh_resolved_host(target: &str, port: Option<u16>) -> anyhow::Result<Ve
     if let Some(port) = port {
         cmd.args(["-p", &port.to_string()]);
     }
-    let out = cmd.arg(target).stdin(Stdio::null()).output().await.map_err(ssh_spawn_error)?;
+    let out = cmd
+        .arg(target)
+        .stdin(Stdio::null())
+        .output()
+        .await
+        .map_err(ssh_spawn_error)?;
     let config = String::from_utf8_lossy(&out.stdout);
-    let option = |key: &str| config.lines().find_map(|l| l.strip_prefix(key)?.strip_prefix(' ')).map(str::trim);
+    let option = |key: &str| {
+        config
+            .lines()
+            .find_map(|l| l.strip_prefix(key)?.strip_prefix(' '))
+            .map(str::trim)
+    };
     let host = option("hostname").unwrap_or(target.rsplit('@').next().unwrap_or(target));
     // A ProxyJump/ProxyCommand server resolves the name itself.
-    if option("proxyjump").is_some_and(|v| v != "none") || option("proxycommand").is_some_and(|v| v != "none") {
+    if option("proxyjump").is_some_and(|v| v != "none")
+        || option("proxycommand").is_some_and(|v| v != "none")
+    {
         return Ok(Vec::new());
     }
     if host.parse::<std::net::IpAddr>().is_ok() {
         return Ok(Vec::new());
     }
     let ips = crate::dns::Doh::global().lookup(host).await?;
-    let ip = ips.first().ok_or_else(|| anyhow::anyhow!("{host} has no address"))?;
-    let alias = option("hostkeyalias").filter(|a| *a != "none").unwrap_or(host);
-    Ok(vec!["-o".into(), format!("HostName={ip}"), "-o".into(), format!("HostKeyAlias={alias}")])
+    let ip = ips
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("{host} has no address"))?;
+    let alias = option("hostkeyalias")
+        .filter(|a| *a != "none")
+        .unwrap_or(host);
+    Ok(vec![
+        "-o".into(),
+        format!("HostName={ip}"),
+        "-o".into(),
+        format!("HostKeyAlias={alias}"),
+    ])
 }
 
 fn proxied_client(url: &str) -> anyhow::Result<reqwest::Client> {
@@ -329,7 +411,9 @@ fn proxied_client(url: &str) -> anyhow::Result<reqwest::Client> {
 }
 
 async fn start_tunnel(exit: &Exit) -> anyhow::Result<Tunnel> {
-    let Exit::Ssh { user, host, port } = exit else { unreachable!("not an ssh exit") };
+    let Exit::Ssh { user, host, port } = exit else {
+        unreachable!("not an ssh exit")
+    };
     let local = free_port()?;
     let target = match user {
         Some(user) => format!("{user}@{host}"),
@@ -340,13 +424,27 @@ async fn start_tunnel(exit: &Exit) -> anyhow::Result<Tunnel> {
     cmd.args(["-N", "-D", &format!("127.0.0.1:{local}")])
         .args(&resolved)
         // No prompts: a password or an unknown-key question would hang the proxy.
-        .args(["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new"])
+        .args([
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+        ])
         .args(["-o", "ExitOnForwardFailure=yes", "-o", "ConnectTimeout=10"])
-        .args(["-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"]);
+        .args([
+            "-o",
+            "ServerAliveInterval=15",
+            "-o",
+            "ServerAliveCountMax=3",
+        ]);
     if let Some(port) = port {
         cmd.args(["-p", &port.to_string()]);
     }
-    cmd.arg(&target).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).kill_on_drop(true);
+    cmd.arg(&target)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
     let mut child = cmd.spawn().map_err(ssh_spawn_error)?;
 
     let stderr = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -370,22 +468,42 @@ async fn start_tunnel(exit: &Exit) -> anyhow::Result<Tunnel> {
             // Let the reader catch the last lines.
             tokio::time::sleep(Duration::from_millis(100)).await;
             let text = stderr.lock().unwrap().join(" | ");
-            anyhow::bail!("ssh {target} exited ({status}){}", if text.is_empty() { String::new() } else { format!(": {text}") });
+            anyhow::bail!(
+                "ssh {target} exited ({status}){}",
+                if text.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {text}")
+                }
+            );
         }
-        if tokio::net::TcpStream::connect(("127.0.0.1", local)).await.is_ok() {
+        if tokio::net::TcpStream::connect(("127.0.0.1", local))
+            .await
+            .is_ok()
+        {
             break;
         }
         if tokio::time::Instant::now() > deadline {
-            anyhow::bail!("ssh {target} did not open its tunnel in {}s", TUNNEL_STARTUP.as_secs());
+            anyhow::bail!(
+                "ssh {target} did not open its tunnel in {}s",
+                TUNNEL_STARTUP.as_secs()
+            );
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
     let client = proxied_client(&format!("socks5h://127.0.0.1:{local}"))?;
-    Ok(Tunnel { child, client, port: local, stderr })
+    Ok(Tunnel {
+        child,
+        client,
+        port: local,
+        stderr,
+    })
 }
 
 fn free_port() -> anyhow::Result<u16> {
-    Ok(std::net::TcpListener::bind(("127.0.0.1", 0))?.local_addr()?.port())
+    Ok(std::net::TcpListener::bind(("127.0.0.1", 0))?
+        .local_addr()?
+        .port())
 }
 
 /// Where one exit, or one provider through its exit, comes out.
@@ -429,7 +547,12 @@ impl Exits {
             Ok(location) => (Some(location), None),
             Err(e) => (None, Some(format!("{e:#}"))),
         };
-        Probe { exit: exit.label(), spec: exit.spec(), location, error }
+        Probe {
+            exit: exit.label(),
+            spec: exit.spec(),
+            location,
+            error,
+        }
     }
 
     /// Checks every exit and every enabled provider family at once. `origin` gives a family's
@@ -437,19 +560,32 @@ impl Exits {
     pub async fn report(&self, origin: impl Fn(&str) -> String, start_tunnels: bool) -> Report {
         let mut all = vec![Exit::Direct];
         all.extend(listed());
-        let exits = futures_util::future::join_all(all.iter().map(|e| self.probe(e, geo::NEUTRAL_ORIGIN, start_tunnels)));
+        let exits = futures_util::future::join_all(
+            all.iter()
+                .map(|e| self.probe(e, geo::NEUTRAL_ORIGIN, start_tunnels)),
+        );
         let families: Vec<(&str, String)> = FAMILIES
             .iter()
             .filter(|f| !crate::families::is_disabled(f))
             .map(|f| (*f, origin(f)))
             .collect();
-        let family_probes = futures_util::future::join_all(families.iter().map(|(family, origin)| async move {
-            let probe = match configured(family) {
-                Ok(exit) => self.probe(&exit, origin, start_tunnels).await,
-                Err(e) => Probe { exit: "?".into(), spec: String::new(), location: None, error: Some(format!("{e:#}")) },
-            };
-            FamilyProbe { family: family.to_string(), origin: origin.clone(), probe }
-        }));
+        let family_probes =
+            futures_util::future::join_all(families.iter().map(|(family, origin)| async move {
+                let probe = match configured(family) {
+                    Ok(exit) => self.probe(&exit, origin, start_tunnels).await,
+                    Err(e) => Probe {
+                        exit: "?".into(),
+                        spec: String::new(),
+                        location: None,
+                        error: Some(format!("{e:#}")),
+                    },
+                };
+                FamilyProbe {
+                    family: family.to_string(),
+                    origin: origin.clone(),
+                    probe,
+                }
+            }));
         let (exits, families) = tokio::join!(exits, family_probes);
         Report { exits, families }
     }
@@ -465,22 +601,41 @@ mod tests {
         assert_eq!(Exit::parse("direct").unwrap(), Exit::Direct);
         assert_eq!(
             Exit::parse("ssh://root@1.2.3.4:2222").unwrap(),
-            Exit::Ssh { user: Some("root".into()), host: "1.2.3.4".into(), port: Some(2222) }
+            Exit::Ssh {
+                user: Some("root".into()),
+                host: "1.2.3.4".into(),
+                port: Some(2222)
+            }
         );
-        assert_eq!(Exit::parse("ssh://vps.example").unwrap().spec(), "ssh://vps.example");
-        assert_eq!(Exit::parse("ssh://u@[::1]:22").unwrap().spec(), "ssh://u@[::1]:22");
-        assert!(matches!(Exit::parse("socks5://127.0.0.1:1080").unwrap(), Exit::Proxy(_)));
+        assert_eq!(
+            Exit::parse("ssh://vps.example").unwrap().spec(),
+            "ssh://vps.example"
+        );
+        assert_eq!(
+            Exit::parse("ssh://u@[::1]:22").unwrap().spec(),
+            "ssh://u@[::1]:22"
+        );
+        assert!(matches!(
+            Exit::parse("socks5://127.0.0.1:1080").unwrap(),
+            Exit::Proxy(_)
+        ));
         assert!(Exit::parse("ftp://x").is_err());
         assert!(Exit::parse("nonsense").is_err());
     }
 
     #[test]
     fn hides_proxy_password() {
-        assert_eq!(Exit::parse("http://u:secret@proxy:3128").unwrap().label(), "http://u@proxy:3128");
+        assert_eq!(
+            Exit::parse("http://u:secret@proxy:3128").unwrap().label(),
+            "http://u@proxy:3128"
+        );
     }
 
     #[test]
     fn route_keys() {
-        assert_eq!(route_key("openai-compat"), "CLAUDE_BRIDGE_EXIT_OPENAI_COMPAT");
+        assert_eq!(
+            route_key("openai-compat"),
+            "CLAUDE_BRIDGE_EXIT_OPENAI_COMPAT"
+        );
     }
 }

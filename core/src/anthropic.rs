@@ -109,7 +109,10 @@ impl ImageSource {
     pub fn media_type(&self) -> &str {
         match self {
             ImageSource::Base64 { media_type, .. } => media_type,
-            ImageSource::Url { media_type: Some(m), .. } => m,
+            ImageSource::Url {
+                media_type: Some(m),
+                ..
+            } => m,
             _ => "unknown",
         }
     }
@@ -161,7 +164,9 @@ pub enum ToolChoice {
     Auto,
     Any,
     None,
-    Tool { name: String },
+    Tool {
+        name: String,
+    },
     #[serde(other)]
     Other,
 }
@@ -172,13 +177,16 @@ impl MessagesRequest {
     /// Claude Code's WebSearch/WebFetch run client-side and break through the proxy;
     /// providers with built-in search get told to use that instead.
     pub fn prefer_native_search(&mut self) {
-        self.tools.retain(|t| t.name != "WebSearch" && t.name != "WebFetch");
+        self.tools
+            .retain(|t| t.name != "WebSearch" && t.name != "WebFetch");
         match &mut self.system {
             Some(System::Text(text)) => {
                 text.push_str("\n\n");
                 text.push_str(NATIVE_SEARCH_NOTE);
             }
-            Some(System::Blocks(blocks)) => blocks.push(SystemBlock { text: NATIVE_SEARCH_NOTE.into() }),
+            Some(System::Blocks(blocks)) => blocks.push(SystemBlock {
+                text: NATIVE_SEARCH_NOTE.into(),
+            }),
             None => self.system = Some(System::Text(NATIVE_SEARCH_NOTE.into())),
         }
     }
@@ -202,8 +210,11 @@ impl Usage {
     /// One `usage` line per finished request in proxy.log. `context` is the whole prompt the
     /// upstream processed (uncached + cache reads + cache writes).
     pub fn log(&self, provider: &str, model: &str) {
-        let context = self.input_tokens + self.cache_read_input_tokens + self.cache_creation_input_tokens;
-        let cache_hit_pct = (self.cache_read_input_tokens * 100).checked_div(context).unwrap_or(0);
+        let context =
+            self.input_tokens + self.cache_read_input_tokens + self.cache_creation_input_tokens;
+        let cache_hit_pct = (self.cache_read_input_tokens * 100)
+            .checked_div(context)
+            .unwrap_or(0);
         tracing::info!(
             provider,
             model,
@@ -221,9 +232,17 @@ impl Usage {
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StartBlock {
-    Text { text: String },
-    Thinking { thinking: String },
-    ToolUse { id: String, name: String, input: Value },
+    Text {
+        text: String,
+    },
+    Thinking {
+        thinking: String,
+    },
+    ToolUse {
+        id: String,
+        name: String,
+        input: Value,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -243,11 +262,24 @@ pub struct MessageHead {
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
-    MessageStart { message: MessageHead },
-    ContentBlockStart { index: usize, content_block: StartBlock },
-    ContentBlockDelta { index: usize, delta: Delta },
-    ContentBlockStop { index: usize },
-    MessageDelta { stop_reason: String, usage: Usage },
+    MessageStart {
+        message: MessageHead,
+    },
+    ContentBlockStart {
+        index: usize,
+        content_block: StartBlock,
+    },
+    ContentBlockDelta {
+        index: usize,
+        delta: Delta,
+    },
+    ContentBlockStop {
+        index: usize,
+    },
+    MessageDelta {
+        stop_reason: String,
+        usage: Usage,
+    },
     MessageStop,
 }
 
@@ -341,7 +373,10 @@ impl MessageWriter {
     }
 
     async fn send(&self, event: Event) -> Result<(), ProxyError> {
-        self.tx.send(Ok(event)).await.map_err(|_| ProxyError::client_gone())
+        self.tx
+            .send(Ok(event))
+            .await
+            .map_err(|_| ProxyError::client_gone())
     }
 
     pub async fn start(&mut self) -> Result<(), ProxyError> {
@@ -349,7 +384,10 @@ impl MessageWriter {
             return Ok(());
         }
         self.started = true;
-        let message = MessageHead { id: self.id.clone(), model: self.model.clone() };
+        let message = MessageHead {
+            id: self.id.clone(),
+            model: self.model.clone(),
+        };
         self.send(Event::MessageStart { message }).await
     }
 
@@ -366,11 +404,19 @@ impl MessageWriter {
         self.start().await?;
         self.close_block().await?;
         self.open = Some(kind);
-        self.send(Event::ContentBlockStart { index: self.next_index, content_block: block }).await
+        self.send(Event::ContentBlockStart {
+            index: self.next_index,
+            content_block: block,
+        })
+        .await
     }
 
     async fn delta(&self, delta: Delta) -> Result<(), ProxyError> {
-        self.send(Event::ContentBlockDelta { index: self.next_index, delta }).await
+        self.send(Event::ContentBlockDelta {
+            index: self.next_index,
+            delta,
+        })
+        .await
     }
 
     pub async fn text(&mut self, text: &str) -> Result<(), ProxyError> {
@@ -378,7 +424,13 @@ impl MessageWriter {
             return Ok(());
         }
         if self.open != Some(OpenKind::Text) {
-            self.open_block(OpenKind::Text, StartBlock::Text { text: String::new() }).await?;
+            self.open_block(
+                OpenKind::Text,
+                StartBlock::Text {
+                    text: String::new(),
+                },
+            )
+            .await?;
         }
         self.delta(Delta::TextDelta { text: text.into() }).await
     }
@@ -388,13 +440,26 @@ impl MessageWriter {
             return Ok(());
         }
         if self.open != Some(OpenKind::Thinking) {
-            self.open_block(OpenKind::Thinking, StartBlock::Thinking { thinking: String::new() }).await?;
+            self.open_block(
+                OpenKind::Thinking,
+                StartBlock::Thinking {
+                    thinking: String::new(),
+                },
+            )
+            .await?;
         }
-        self.delta(Delta::ThinkingDelta { thinking: thinking.into() }).await
+        self.delta(Delta::ThinkingDelta {
+            thinking: thinking.into(),
+        })
+        .await
     }
 
     pub async fn start_tool(&mut self, id: &str, name: &str) -> Result<(), ProxyError> {
-        let block = StartBlock::ToolUse { id: id.into(), name: name.into(), input: json!({}) };
+        let block = StartBlock::ToolUse {
+            id: id.into(),
+            name: name.into(),
+            input: json!({}),
+        };
         self.open_block(OpenKind::Tool, block).await
     }
 
@@ -403,15 +468,25 @@ impl MessageWriter {
         if partial_json.is_empty() || !self.tool_open() {
             return Ok(());
         }
-        self.delta(Delta::InputJsonDelta { partial_json: partial_json.into() }).await
+        self.delta(Delta::InputJsonDelta {
+            partial_json: partial_json.into(),
+        })
+        .await
     }
 
     pub async fn finish(mut self, stop_reason: &str, usage: Usage) -> Result<Outcome, ProxyError> {
         self.start().await?;
         self.close_block().await?;
-        self.send(Event::MessageDelta { stop_reason: stop_reason.into(), usage }).await?;
+        self.send(Event::MessageDelta {
+            stop_reason: stop_reason.into(),
+            usage,
+        })
+        .await?;
         self.send(Event::MessageStop).await?;
-        Ok(Outcome { stop_reason: stop_reason.into(), usage })
+        Ok(Outcome {
+            stop_reason: stop_reason.into(),
+            usage,
+        })
     }
 }
 
@@ -420,14 +495,20 @@ impl MessageWriter {
 enum AggBlock {
     Text(String),
     Thinking(String),
-    ToolUse { id: String, name: String, args: String },
+    ToolUse {
+        id: String,
+        name: String,
+        args: String,
+    },
 }
 
 impl AggBlock {
     fn into_json(self) -> Value {
         match self {
             AggBlock::Text(text) => json!({ "type": "text", "text": text }),
-            AggBlock::Thinking(thinking) => json!({ "type": "thinking", "thinking": thinking, "signature": "" }),
+            AggBlock::Thinking(thinking) => {
+                json!({ "type": "thinking", "thinking": thinking, "signature": "" })
+            }
             AggBlock::ToolUse { id, name, args } => {
                 let input = if args.trim().is_empty() {
                     json!({})
@@ -457,21 +538,31 @@ impl Aggregator {
                 self.id = message.id;
                 self.model = message.model;
             }
-            Event::ContentBlockStart { index, content_block } => {
+            Event::ContentBlockStart {
+                index,
+                content_block,
+            } => {
                 let block = match content_block {
                     StartBlock::Text { text } => AggBlock::Text(text),
                     StartBlock::Thinking { thinking } => AggBlock::Thinking(thinking),
-                    StartBlock::ToolUse { id, name, .. } => AggBlock::ToolUse { id, name, args: String::new() },
+                    StartBlock::ToolUse { id, name, .. } => AggBlock::ToolUse {
+                        id,
+                        name,
+                        args: String::new(),
+                    },
                 };
                 self.blocks.push((index, block));
             }
             Event::ContentBlockDelta { index, delta } => {
-                let Some((_, block)) = self.blocks.iter_mut().rev().find(|(i, _)| *i == index) else {
+                let Some((_, block)) = self.blocks.iter_mut().rev().find(|(i, _)| *i == index)
+                else {
                     return;
                 };
                 match (block, delta) {
                     (AggBlock::Text(acc), Delta::TextDelta { text }) => acc.push_str(&text),
-                    (AggBlock::Thinking(acc), Delta::ThinkingDelta { thinking }) => acc.push_str(&thinking),
+                    (AggBlock::Thinking(acc), Delta::ThinkingDelta { thinking }) => {
+                        acc.push_str(&thinking)
+                    }
                     (AggBlock::ToolUse { args, .. }, Delta::InputJsonDelta { partial_json }) => {
                         args.push_str(&partial_json)
                     }
@@ -487,7 +578,11 @@ impl Aggregator {
     }
 
     pub fn finish(self) -> Value {
-        let content: Vec<Value> = self.blocks.into_iter().map(|(_, b)| b.into_json()).collect();
+        let content: Vec<Value> = self
+            .blocks
+            .into_iter()
+            .map(|(_, b)| b.into_json())
+            .collect();
         json!({
             "id": self.id,
             "type": "message",
@@ -563,7 +658,10 @@ mod tests {
         let msg = agg.finish();
         assert_eq!(msg["model"], "m");
         assert_eq!(msg["content"][0]["thinking"], "plan");
-        assert_eq!(msg["content"][1], json!({ "type": "text", "text": "Hello world" }));
+        assert_eq!(
+            msg["content"][1],
+            json!({ "type": "text", "text": "Hello world" })
+        );
         assert_eq!(
             msg["content"][2],
             json!({ "type": "tool_use", "id": "call_1", "name": "Bash", "input": { "command": "ls" } })
@@ -593,10 +691,16 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(req.system_text(), "sys");
-        let Content::Blocks(blocks) = &req.messages[1].content else { panic!() };
+        let Content::Blocks(blocks) = &req.messages[1].content else {
+            panic!()
+        };
         assert!(matches!(blocks[0], Block::Other));
-        let Content::Blocks(blocks) = &req.messages[2].content else { panic!() };
-        let Block::ToolResult { content, .. } = &blocks[0] else { panic!() };
+        let Content::Blocks(blocks) = &req.messages[2].content else {
+            panic!()
+        };
+        let Block::ToolResult { content, .. } = &blocks[0] else {
+            panic!()
+        };
         assert_eq!(content.to_text(), "ok");
     }
 }

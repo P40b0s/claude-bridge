@@ -51,11 +51,24 @@ pub fn managed_env() -> Vec<(&'static str, String)> {
     // Without it a connected `claude` compacts by Claude's own window, long after GPT sessions
     // get expensive.
     let ctx = crate::launcher::codex_context();
+    // Claude Code assumes 200k for a model it does not know (gpt-*) and compacts at the smaller of
+    // that and the window above; this sets the real one. Claude models keep their own window.
+    env.push(("CLAUDE_CODE_MAX_CONTEXT_TOKENS", ctx.tokens.to_string()));
     if !ctx.disable_compact {
-        env.push(("CLAUDE_CODE_AUTO_COMPACT_WINDOW", ctx.auto_compact_at.to_string()));
+        env.push((
+            "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+            ctx.auto_compact_at.to_string(),
+        ));
     }
     // Telemetry, error reports, update checks: straight to Anthropic and others from the real address.
     env.push(("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1".into()));
+    // Claude Code honors BROWSER for /login. Point it at our opener so Claude account changes use
+    // the browser/profile/egress selected in the bridge too.
+    match crate::browser::claude_code_opener() {
+        Ok(Some(opener)) => env.push(("BROWSER", opener)),
+        Ok(None) => {}
+        Err(e) => tracing::warn!("browser opener: {e:#}"),
+    }
     // Everything else Claude Code sends (OAuth refresh, MCP over HTTP, WebFetch, the tools it
     // runs) leaves through the egress proxy; the bridge itself is reached directly.
     if let Some(url) = crate::egress::url() {
@@ -97,7 +110,10 @@ pub fn language() -> Option<String> {
 
 /// `en` → `en_US.UTF-8`, `de` → `de_DE.UTF-8`; full names stay.
 fn full_locale(value: &str) -> String {
-    if value.contains(['_', '.']) || value.eq_ignore_ascii_case("C") || value.eq_ignore_ascii_case("POSIX") {
+    if value.contains(['_', '.'])
+        || value.eq_ignore_ascii_case("C")
+        || value.eq_ignore_ascii_case("POSIX")
+    {
         return value.to_string();
     }
     let lang = value.to_ascii_lowercase();
@@ -125,9 +141,13 @@ fn locale_exists(locale: &str) -> bool {
         return true;
     }
     let norm = |s: &str| s.to_ascii_lowercase().replace(['-', '_', '.'], "");
-    let Ok(out) = std::process::Command::new("locale").arg("-a").output() else { return true };
+    let Ok(out) = std::process::Command::new("locale").arg("-a").output() else {
+        return true;
+    };
     let want = norm(locale);
-    String::from_utf8_lossy(&out.stdout).lines().any(|l| norm(l.trim()) == want)
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .any(|l| norm(l.trim()) == want)
 }
 
 pub const TZ_KEY: &str = "CLAUDE_BRIDGE_TZ";
@@ -144,11 +164,23 @@ pub fn time_zone_setting() -> Option<String> {
 /// The zone Claude Code and the commands it runs get as `TZ`: a name (`UTC`, `Europe/Berlin`), or
 /// with `auto` the zone of the Anthropic exit's country (see `zone`). Unset: theirs stays as is.
 pub fn time_zone() -> Option<String> {
-    time_zone_setting().map(|v| if v.eq_ignore_ascii_case("auto") { crate::zone::auto() } else { v })
+    time_zone_setting().map(|v| {
+        if v.eq_ignore_ascii_case("auto") {
+            crate::zone::auto()
+        } else {
+            v
+        }
+    })
 }
 
 fn marked(env: &Map<String, Value>) -> Vec<String> {
-    env.get(MANAGED_MARKER).and_then(Value::as_str).unwrap_or_default().split(',').filter(|k| !k.is_empty()).map(String::from).collect()
+    env.get(MANAGED_MARKER)
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .split(',')
+        .filter(|k| !k.is_empty())
+        .map(String::from)
+        .collect()
 }
 
 /// Brings the managed values in line with the settings: sets missing ones, updates its own, drops
@@ -164,7 +196,10 @@ fn sync_managed(env: &mut Map<String, Value>) -> bool {
             ours.push(*key);
         }
     }
-    for key in previous.iter().filter(|k| !want.iter().any(|(w, _)| w == k)) {
+    for key in previous
+        .iter()
+        .filter(|k| !want.iter().any(|(w, _)| w == k))
+    {
         env.shift_remove(key.as_str());
     }
     if ours.is_empty() {
@@ -185,7 +220,9 @@ pub enum Connection {
 }
 
 pub fn settings_file() -> PathBuf {
-    let dir = config::env("CLAUDE_CONFIG_DIR").map(PathBuf::from).unwrap_or_else(|| config::home_dir().join(".claude"));
+    let dir = config::env("CLAUDE_CONFIG_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| config::home_dir().join(".claude"));
     dir.join("settings.json")
 }
 
@@ -196,7 +233,10 @@ fn read() -> anyhow::Result<Map<String, Value>> {
         Ok(bytes) => match serde_json::from_slice(&bytes) {
             Ok(Value::Object(map)) => Ok(map),
             Ok(_) => bail!("{} is not a JSON object", path.display()),
-            Err(e) => bail!("{} is not valid JSON ({e}); fix it by hand first", path.display()),
+            Err(e) => bail!(
+                "{} is not valid JSON ({e}); fix it by hand first",
+                path.display()
+            ),
         },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Map::new()),
         Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
@@ -217,7 +257,9 @@ fn write(settings: &Map<String, Value>) -> anyhow::Result<()> {
 }
 
 pub fn connection(port: u16) -> Connection {
-    let url = read().ok().and_then(|s| s.get("env")?.get(BASE_URL)?.as_str().map(String::from));
+    let url = read()
+        .ok()
+        .and_then(|s| s.get("env")?.get(BASE_URL)?.as_str().map(String::from));
     match url {
         Some(url) if url.trim_end_matches('/') == control::base_url(port) => Connection::Connected,
         Some(url) => Connection::Other(url),
@@ -230,7 +272,10 @@ pub fn connection(port: u16) -> Connection {
 /// login it has to go: a token in `env` takes precedence over the subscription. True when `env` changed.
 fn sync_placeholder(env: &mut Map<String, Value>) -> bool {
     let logged_in = auth::claude_code::account().is_some();
-    match env.get(AUTH_TOKEN).map(|v| v.as_str() == Some(PLACEHOLDER_TOKEN)) {
+    match env
+        .get(AUTH_TOKEN)
+        .map(|v| v.as_str() == Some(PLACEHOLDER_TOKEN))
+    {
         None if !logged_in => {
             env.insert(AUTH_TOKEN.into(), json!(PLACEHOLDER_TOKEN));
             true
@@ -247,7 +292,9 @@ fn sync_placeholder(env: &mut Map<String, Value>) -> bool {
 pub fn connect(port: u16) -> anyhow::Result<()> {
     let mut settings = read()?;
     let env = settings.entry("env").or_insert_with(|| json!({}));
-    let Some(env) = env.as_object_mut() else { bail!("\"env\" in {} is not an object", settings_file().display()) };
+    let Some(env) = env.as_object_mut() else {
+        bail!("\"env\" in {} is not an object", settings_file().display())
+    };
     env.insert(BASE_URL.into(), json!(control::base_url(port)));
     env.entry(OPUS_MODEL).or_insert_with(|| json!(OPUS_TARGET));
     sync_managed(env);
@@ -262,7 +309,9 @@ pub fn sync_auth(port: u16) -> anyhow::Result<()> {
         return Ok(());
     }
     let mut settings = read()?;
-    let Some(env) = settings.get_mut("env").and_then(Value::as_object_mut) else { return Ok(()) };
+    let Some(env) = settings.get_mut("env").and_then(Value::as_object_mut) else {
+        return Ok(());
+    };
     let changed = sync_placeholder(env) | sync_managed(env);
     if changed { write(&settings) } else { Ok(()) }
 }
@@ -270,10 +319,15 @@ pub fn sync_auth(port: u16) -> anyhow::Result<()> {
 /// Removes only what `connect` added; an empty `env` goes away too.
 pub fn disconnect() -> anyhow::Result<()> {
     let mut settings = read()?;
-    let Some(env) = settings.get_mut("env").and_then(Value::as_object_mut) else { return Ok(()) };
-    let ours = |v: Option<&Value>, f: &dyn Fn(&str) -> bool| v.and_then(Value::as_str).is_some_and(f);
+    let Some(env) = settings.get_mut("env").and_then(Value::as_object_mut) else {
+        return Ok(());
+    };
+    let ours =
+        |v: Option<&Value>, f: &dyn Fn(&str) -> bool| v.and_then(Value::as_str).is_some_and(f);
     let mut changed = false;
-    if ours(env.get(BASE_URL), &|u| u.starts_with("http://127.0.0.1:") || u.starts_with("http://localhost:")) {
+    if ours(env.get(BASE_URL), &|u| {
+        u.starts_with("http://127.0.0.1:") || u.starts_with("http://localhost:")
+    }) {
         env.shift_remove(BASE_URL);
         changed = true;
     }

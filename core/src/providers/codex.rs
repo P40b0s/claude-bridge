@@ -11,7 +11,10 @@ use serde_json::{Value, json};
 use tracing::{info, warn};
 
 use super::reasoning_cache::{conversation_key, message_step_key, step_key, thread_id};
-use crate::anthropic::{Block, Content, ImageSource, Message, MessageWriter, MessagesRequest, Outcome, Tool, ToolChoice, Usage};
+use crate::anthropic::{
+    Block, Content, ImageSource, Message, MessageWriter, MessagesRequest, Outcome, Tool,
+    ToolChoice, Usage,
+};
 use crate::config;
 use crate::error::ProxyError;
 use crate::routing::{Reasoning, Target};
@@ -79,7 +82,11 @@ fn image_url(source: &ImageSource) -> String {
 }
 
 fn text_part(role: &str, text: &str) -> Value {
-    let kind = if role == "assistant" { "output_text" } else { "input_text" };
+    let kind = if role == "assistant" {
+        "output_text"
+    } else {
+        "input_text"
+    };
     json!({ "type": kind, "text": text })
 }
 
@@ -87,7 +94,10 @@ fn text_part(role: &str, text: &str) -> Value {
 /// reuses an exact prefix of the previous request. Tool calls and results become top-level
 /// items after the message text they belong to, and each assistant step is preceded by the
 /// cached reasoning that produced it.
-pub fn to_responses_input(messages: &[Message], reasoning: &HashMap<String, Vec<Value>>) -> Vec<Value> {
+pub fn to_responses_input(
+    messages: &[Message],
+    reasoning: &HashMap<String, Vec<Value>>,
+) -> Vec<Value> {
     let mut out = Vec::new();
     for m in messages {
         if m.role == "assistant"
@@ -109,7 +119,9 @@ pub fn to_responses_input(messages: &[Message], reasoning: &HashMap<String, Vec<
         for block in blocks {
             match block {
                 Block::Text { text } => parts.push(text_part(&m.role, text)),
-                Block::Image { source } => parts.push(json!({ "type": "input_image", "image_url": image_url(source) })),
+                Block::Image { source } => {
+                    parts.push(json!({ "type": "input_image", "image_url": image_url(source) }))
+                }
                 Block::ToolUse { id, name, input } => {
                     let arguments = match input {
                         Value::String(s) => s.clone(),
@@ -118,7 +130,10 @@ pub fn to_responses_input(messages: &[Message], reasoning: &HashMap<String, Vec<
                     };
                     trailing.push(json!({ "type": "function_call", "call_id": id, "name": name, "arguments": arguments }));
                 }
-                Block::ToolResult { tool_use_id, content } => {
+                Block::ToolResult {
+                    tool_use_id,
+                    content,
+                } => {
                     trailing.push(json!({ "type": "function_call_output", "call_id": tool_use_id, "output": content.to_text() }));
                 }
                 // Replayed Anthropic thinking is not reusable Codex state; only the encrypted
@@ -136,14 +151,23 @@ pub fn to_responses_input(messages: &[Message], reasoning: &HashMap<String, Vec<
 
 /// A request that answers a fresh user message rather than continuing a tool loop.
 fn starts_user_turn(messages: &[Message]) -> bool {
-    match messages.iter().rev().find(|m| m.role == "user").map(|m| &m.content) {
-        Some(Content::Blocks(blocks)) => !blocks.iter().any(|b| matches!(b, Block::ToolResult { .. })),
+    match messages
+        .iter()
+        .rev()
+        .find(|m| m.role == "user")
+        .map(|m| &m.content)
+    {
+        Some(Content::Blocks(blocks)) => {
+            !blocks.iter().any(|b| matches!(b, Block::ToolResult { .. }))
+        }
         _ => true,
     }
 }
 
-const COMPACTION_MARKERS: [&str; 2] =
-    ["CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.", "Your task is to create a detailed summary of"];
+const COMPACTION_MARKERS: [&str; 2] = [
+    "CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.",
+    "Your task is to create a detailed summary of",
+];
 
 /// Claude Code's generated compaction turn (not a user asking for a summary).
 pub fn is_compaction_request(req: &MessagesRequest) -> bool {
@@ -173,11 +197,18 @@ pub fn effective_effort(req: &MessagesRequest, level: Option<Reasoning>) -> &'st
         // one, the API's own default.
         None => "medium",
     };
-    if is_compaction_request(req) && !matches!(effort, "low" | "medium") { "medium" } else { effort }
+    if is_compaction_request(req) && !matches!(effort, "low" | "medium") {
+        "medium"
+    } else {
+        effort
+    }
 }
 
 fn reasoning_summary() -> Option<&'static str> {
-    match config::env("CODEX_REASONING_SUMMARY").map(|s| s.to_ascii_lowercase()).as_deref() {
+    match config::env("CODEX_REASONING_SUMMARY")
+        .map(|s| s.to_ascii_lowercase())
+        .as_deref()
+    {
         Some("none") => None,
         Some("concise") => Some("concise"),
         Some("detailed") => Some("detailed"),
@@ -186,7 +217,10 @@ fn reasoning_summary() -> Option<&'static str> {
 }
 
 fn text_verbosity() -> Option<&'static str> {
-    match config::env("CODEX_TEXT_VERBOSITY").map(|s| s.to_ascii_lowercase()).as_deref() {
+    match config::env("CODEX_TEXT_VERBOSITY")
+        .map(|s| s.to_ascii_lowercase())
+        .as_deref()
+    {
         Some("low") => Some("low"),
         Some("medium") => Some("medium"),
         Some("high") => Some("high"),
@@ -195,19 +229,25 @@ fn text_verbosity() -> Option<&'static str> {
 }
 
 fn installation_id() -> Option<String> {
-    let id = std::fs::read_to_string(config::home_dir().join(".codex").join("installation_id")).ok()?;
+    let id =
+        std::fs::read_to_string(config::home_dir().join(".codex").join("installation_id")).ok()?;
     Some(id.trim().to_string()).filter(|s| !s.is_empty())
 }
 
 fn user_agent() -> String {
-    let version = config::env("CODEX_CLI_VERSION").unwrap_or_else(|| DEFAULT_CODEX_CLI_VERSION.into());
+    let version =
+        config::env("CODEX_CLI_VERSION").unwrap_or_else(|| DEFAULT_CODEX_CLI_VERSION.into());
     let release = std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
     let os = match std::env::consts::OS {
         "linux" => "Linux",
         "macos" => "Darwin",
         other => other,
     };
-    format!("{ORIGINATOR}/{version} ({os} {}; {})", release.trim(), std::env::consts::ARCH)
+    format!(
+        "{ORIGINATOR}/{version} ({os} {}; {})",
+        release.trim(),
+        std::env::consts::ARCH
+    )
 }
 
 // ── Main adapter ─────────────────────────────────────────────────────
@@ -224,7 +264,12 @@ pub async fn run(
         CodexAuth::ApiKey(key) => ("api", format!("{OPENAI_API_BASE}/responses"), key, None),
         CodexAuth::ChatGpt => {
             let creds = state.openai_auth.credentials(&http).await?;
-            ("chatgpt", format!("{CHATGPT_CODEX_BASE}/responses"), creds.access_token, creds.account_id)
+            (
+                "chatgpt",
+                format!("{CHATGPT_CODEX_BASE}/responses"),
+                creds.access_token,
+                creds.account_id,
+            )
         }
     };
 
@@ -233,7 +278,11 @@ pub async fn run(
     let thread = conversation_key(&req.messages);
     let convo_key = format!("{}:{thread}", target.model);
     let cache_enabled = config::env("CODEX_DISABLE_REASONING_CACHE").as_deref() != Some("1");
-    let cached = if cache_enabled { state.reasoning_cache.get(&convo_key) } else { HashMap::new() };
+    let cached = if cache_enabled {
+        state.reasoning_cache.get(&convo_key)
+    } else {
+        HashMap::new()
+    };
     let cached_count = cached.len();
     let input = to_responses_input(&req.messages, &cached);
     let item_count = input.len();
@@ -241,7 +290,9 @@ pub async fn run(
     // ChatGPT picks the cache replica from the session-id header, not from prompt_cache_key;
     // without it requests scatter and only hit whatever prefix each replica saw last.
     let session_id = thread_id(&thread);
-    let turn_state = state.reasoning_cache.turn_state(&convo_key, starts_user_turn(&req.messages));
+    let turn_state = state
+        .reasoning_cache
+        .turn_state(&convo_key, starts_user_turn(&req.messages));
 
     let mut reasoning = json!({ "effort": effort });
     if let Some(summary) = reasoning_summary() {
@@ -315,7 +366,10 @@ pub async fn run(
             // already closed), so re-sending it is safe.
             Err(e) if (e.is_connect() || e.is_request()) && attempt < CONNECT_ATTEMPTS => {
                 let backoff = Duration::from_millis(250 * u64::from(attempt));
-                warn!("codex connect failed (attempt {attempt}/{CONNECT_ATTEMPTS}): {}", ProxyError::from(e));
+                warn!(
+                    "codex connect failed (attempt {attempt}/{CONNECT_ATTEMPTS}): {}",
+                    ProxyError::from(e)
+                );
                 tokio::time::sleep(backoff).await;
             }
             Err(e) => return Err(e.into()),
@@ -327,18 +381,31 @@ pub async fn run(
         let text = resp.text().await.unwrap_or_default();
         return Err(ProxyError::upstream("OpenAI", status, &text));
     }
-    if let Some(value) = resp.headers().get(TURN_STATE_HEADER).and_then(|v| v.to_str().ok()) {
-        state.reasoning_cache.set_turn_state(&convo_key, value.to_string());
+    if let Some(value) = resp
+        .headers()
+        .get(TURN_STATE_HEADER)
+        .and_then(|v| v.to_str().ok())
+    {
+        state
+            .reasoning_cache
+            .set_turn_state(&convo_key, value.to_string());
     }
 
     let mut pump = Pump::new(w);
     let mut events = resp.bytes_stream().eventsource();
     while let Some(event) = events.next().await {
-        let event = event.map_err(|e| ProxyError::new(axum::http::StatusCode::BAD_GATEWAY, format!("OpenAI stream: {e}")))?;
+        let event = event.map_err(|e| {
+            ProxyError::new(
+                axum::http::StatusCode::BAD_GATEWAY,
+                format!("OpenAI stream: {e}"),
+            )
+        })?;
         if event.data.is_empty() || event.data == "[DONE]" {
             continue;
         }
-        let Ok(json) = serde_json::from_str::<Value>(&event.data) else { continue };
+        let Ok(json) = serde_json::from_str::<Value>(&event.data) else {
+            continue;
+        };
         pump.handle(&json).await?;
     }
 
@@ -353,7 +420,9 @@ pub async fn run(
     );
     if !pump.reasoning.is_empty() {
         let step = step_key(pump.first_call_id.as_deref(), &pump.text);
-        state.reasoning_cache.add_step(&convo_key, step, std::mem::take(&mut pump.reasoning));
+        state
+            .reasoning_cache
+            .add_step(&convo_key, step, std::mem::take(&mut pump.reasoning));
     }
     pump.w.finish(pump.stop_reason, pump.usage).await
 }
@@ -383,7 +452,17 @@ struct Pump {
 
 impl Pump {
     fn new(w: MessageWriter) -> Self {
-        Self { w, text_chars: 0, text: String::new(), first_call_id: None, tool_calls: 0, current_tool: None, stop_reason: "end_turn", usage: Usage::default(), reasoning: Vec::new() }
+        Self {
+            w,
+            text_chars: 0,
+            text: String::new(),
+            first_call_id: None,
+            tool_calls: 0,
+            current_tool: None,
+            stop_reason: "end_turn",
+            usage: Usage::default(),
+            reasoning: Vec::new(),
+        }
     }
 
     async fn text(&mut self, text: &str) -> Result<(), ProxyError> {
@@ -405,7 +484,9 @@ impl Pump {
         if u.is_object() {
             let (input, cached) = split_input_usage(
                 u["input_tokens"].as_i64().unwrap_or(0),
-                u["input_tokens_details"]["cached_tokens"].as_i64().unwrap_or(0),
+                u["input_tokens_details"]["cached_tokens"]
+                    .as_i64()
+                    .unwrap_or(0),
             );
             self.usage.input_tokens = input;
             self.usage.cache_read_input_tokens = cached;
@@ -414,7 +495,9 @@ impl Pump {
     }
 
     async fn handle(&mut self, ev: &Value) -> Result<(), ProxyError> {
-        let Some(kind) = ev["type"].as_str() else { return Ok(()) };
+        let Some(kind) = ev["type"].as_str() else {
+            return Ok(());
+        };
         match kind {
             // Start the reply right away so headers go out before the model starts thinking.
             "response.created" => self.w.start().await,
@@ -427,22 +510,36 @@ impl Pump {
             "response.content_part.done" => {
                 let part = &ev["part"];
                 let is_text = matches!(part["type"].as_str(), Some("output_text" | "text"));
-                self.fallback_text(if is_text { part["text"].as_str() } else { None }).await
+                self.fallback_text(if is_text { part["text"].as_str() } else { None })
+                    .await
             }
 
             "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => {
-                self.w.thinking(ev["delta"].as_str().unwrap_or_default()).await
+                self.w
+                    .thinking(ev["delta"].as_str().unwrap_or_default())
+                    .await
             }
             // Paragraph break between summary parts inside one thinking block.
-            "response.reasoning_summary_part.added" if self.w.thinking_open() => self.w.thinking("\n\n").await,
+            "response.reasoning_summary_part.added" if self.w.thinking_open() => {
+                self.w.thinking("\n\n").await
+            }
 
             "response.output_item.added" => {
                 let item = &ev["item"];
                 match item["type"].as_str() {
                     Some("function_call") => {
-                        let call_id = item["call_id"].as_str().or(item["id"].as_str()).unwrap_or_default().to_string();
-                        let item_id = item["id"].as_str().map(String::from).unwrap_or_else(|| call_id.clone());
-                        self.w.start_tool(&call_id, item["name"].as_str().unwrap_or_default()).await?;
+                        let call_id = item["call_id"]
+                            .as_str()
+                            .or(item["id"].as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        let item_id = item["id"]
+                            .as_str()
+                            .map(String::from)
+                            .unwrap_or_else(|| call_id.clone());
+                        self.w
+                            .start_tool(&call_id, item["name"].as_str().unwrap_or_default())
+                            .await?;
                         self.first_call_id.get_or_insert_with(|| call_id.clone());
                         self.current_tool = Some((item_id, false));
                         self.tool_calls += 1;
@@ -455,12 +552,16 @@ impl Pump {
             }
             "response.function_call_arguments.delta" => {
                 let item_id = ev["item_id"].as_str().or(ev["id"].as_str());
-                let Some((current, streamed)) = &mut self.current_tool else { return Ok(()) };
+                let Some((current, streamed)) = &mut self.current_tool else {
+                    return Ok(());
+                };
                 if item_id != Some(current.as_str()) {
                     return Ok(());
                 }
                 *streamed = true;
-                self.w.tool_args(ev["delta"].as_str().unwrap_or_default()).await
+                self.w
+                    .tool_args(ev["delta"].as_str().unwrap_or_default())
+                    .await
             }
             "response.output_item.done" => {
                 let item = &ev["item"];
@@ -473,7 +574,9 @@ impl Pump {
                                 return Ok(());
                             }
                             if !streamed {
-                                self.w.tool_args(item["arguments"].as_str().unwrap_or_default()).await?;
+                                self.w
+                                    .tool_args(item["arguments"].as_str().unwrap_or_default())
+                                    .await?;
                             }
                             self.w.close_block().await?;
                         }
@@ -519,15 +622,23 @@ impl Pump {
                         self.stop_reason = "max_tokens";
                         Ok(())
                     }
-                    reason => Err(ProxyError::internal(format!("OpenAI response incomplete: {}", reason.unwrap_or("unknown")))),
+                    reason => Err(ProxyError::internal(format!(
+                        "OpenAI response incomplete: {}",
+                        reason.unwrap_or("unknown")
+                    ))),
                 }
             }
             "response.failed" => {
-                let msg = ev["response"]["error"]["message"].as_str().unwrap_or("OpenAI response failed");
+                let msg = ev["response"]["error"]["message"]
+                    .as_str()
+                    .unwrap_or("OpenAI response failed");
                 Err(ProxyError::internal(msg.to_string()))
             }
             "error" => {
-                let msg = ev["message"].as_str().or(ev["error"]["message"].as_str()).unwrap_or("OpenAI stream error");
+                let msg = ev["message"]
+                    .as_str()
+                    .or(ev["error"]["message"].as_str())
+                    .unwrap_or("OpenAI stream error");
                 Err(ProxyError::internal(msg.to_string()))
             }
             _ => Ok(()),
@@ -542,7 +653,8 @@ mod tests {
     use tokio::sync::mpsc;
 
     fn msgs(v: Value) -> Vec<Message> {
-        let req: MessagesRequest = serde_json::from_value(json!({ "model": "x", "messages": v })).unwrap();
+        let req: MessagesRequest =
+            serde_json::from_value(json!({ "model": "x", "messages": v })).unwrap();
         req.messages
     }
 
@@ -561,20 +673,40 @@ mod tests {
         let out = to_responses_tools(&tools);
         assert_eq!(out[0]["type"], "function");
         assert_eq!(out[0]["strict"], false);
-        assert_eq!(out[0]["parameters"]["properties"]["command"]["type"], "string");
-        assert_eq!(out[1]["parameters"], json!({ "type": "object", "properties": {} }));
+        assert_eq!(
+            out[0]["parameters"]["properties"]["command"]["type"],
+            "string"
+        );
+        assert_eq!(
+            out[1]["parameters"],
+            json!({ "type": "object", "properties": {} })
+        );
         assert_eq!(out[2], json!({ "type": "web_search" }));
-        assert_eq!(to_responses_tools(&[]), vec![json!({ "type": "web_search" })]);
+        assert_eq!(
+            to_responses_tools(&[]),
+            vec![json!({ "type": "web_search" })]
+        );
     }
 
     #[test]
     fn tool_choice_mapping() {
         assert_eq!(to_responses_tool_choice(None), json!("auto"));
-        assert_eq!(to_responses_tool_choice(Some(&ToolChoice::Auto)), json!("auto"));
-        assert_eq!(to_responses_tool_choice(Some(&ToolChoice::Any)), json!("required"));
-        assert_eq!(to_responses_tool_choice(Some(&ToolChoice::None)), json!("none"));
         assert_eq!(
-            to_responses_tool_choice(Some(&ToolChoice::Tool { name: "Bash".into() })),
+            to_responses_tool_choice(Some(&ToolChoice::Auto)),
+            json!("auto")
+        );
+        assert_eq!(
+            to_responses_tool_choice(Some(&ToolChoice::Any)),
+            json!("required")
+        );
+        assert_eq!(
+            to_responses_tool_choice(Some(&ToolChoice::None)),
+            json!("none")
+        );
+        assert_eq!(
+            to_responses_tool_choice(Some(&ToolChoice::Tool {
+                name: "Bash".into()
+            })),
             json!({ "type": "function", "name": "Bash" })
         );
     }
@@ -583,13 +715,19 @@ mod tests {
     fn plain_and_assistant_text() {
         assert_eq!(
             input(json!([{ "role": "user", "content": "hello" }])),
-            vec![json!({ "type": "message", "role": "user", "content": [{ "type": "input_text", "text": "hello" }] })]
+            vec![
+                json!({ "type": "message", "role": "user", "content": [{ "type": "input_text", "text": "hello" }] })
+            ]
         );
         assert_eq!(
-            input(json!([{ "role": "assistant", "content": [{ "type": "text", "text": "hi" }] }]))[0]["content"][0],
+            input(json!([{ "role": "assistant", "content": [{ "type": "text", "text": "hi" }] }]))
+                [0]["content"][0],
             json!({ "type": "output_text", "text": "hi" })
         );
-        assert_eq!(input(json!([{ "role": "system", "content": "mcp" }]))[0]["role"], "developer");
+        assert_eq!(
+            input(json!([{ "role": "system", "content": "mcp" }]))[0]["role"],
+            "developer"
+        );
     }
 
     #[test]
@@ -608,8 +746,14 @@ mod tests {
         ]));
         assert_eq!(out.len(), 3);
         assert_eq!(out[0]["type"], "message");
-        assert_eq!(out[1], json!({ "type": "function_call", "call_id": "call_1", "name": "Bash", "arguments": "{\"command\":\"ls\"}" }));
-        assert_eq!(out[2], json!({ "type": "function_call_output", "call_id": "call_1", "output": "a.txt\n[image: image/png]" }));
+        assert_eq!(
+            out[1],
+            json!({ "type": "function_call", "call_id": "call_1", "name": "Bash", "arguments": "{\"command\":\"ls\"}" })
+        );
+        assert_eq!(
+            out[2],
+            json!({ "type": "function_call_output", "call_id": "call_1", "output": "a.txt\n[image: image/png]" })
+        );
     }
 
     #[test]
@@ -618,7 +762,10 @@ mod tests {
             { "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": "AA==" } },
             { "type": "image", "source": { "type": "url", "url": "https://x/y.png" } }
         ]}]));
-        assert_eq!(out[0]["content"][0]["image_url"], "data:image/png;base64,AA==");
+        assert_eq!(
+            out[0]["content"][0]["image_url"],
+            "data:image/png;base64,AA=="
+        );
         assert_eq!(out[0]["content"][1]["image_url"], "https://x/y.png");
 
         let out = input(json!([{ "role": "assistant", "content": [
@@ -631,7 +778,9 @@ mod tests {
 
     #[test]
     fn tool_results_continue_the_user_turn() {
-        assert!(starts_user_turn(&msgs(json!([{ "role": "user", "content": "q" }]))));
+        assert!(starts_user_turn(&msgs(
+            json!([{ "role": "user", "content": "q" }])
+        )));
         assert!(!starts_user_turn(&msgs(json!([
             { "role": "user", "content": "q" },
             { "role": "assistant", "content": [{ "type": "tool_use", "id": "t1", "name": "Read", "input": {} }] },
@@ -651,16 +800,39 @@ mod tests {
             { "role": "assistant", "content": "a3" },
             { "role": "user", "content": "q4" }
         ]));
-        let r = |enc: &str| vec![json!({ "type": "reasoning", "summary": [], "encrypted_content": enc })];
-        let cached = HashMap::from([(step_key(Some("t1"), ""), r("r1")), (step_key(None, "a2"), r("r2"))]);
+        let r = |enc: &str| {
+            vec![json!({ "type": "reasoning", "summary": [], "encrypted_content": enc })]
+        };
+        let cached = HashMap::from([
+            (step_key(Some("t1"), ""), r("r1")),
+            (step_key(None, "a2"), r("r2")),
+        ]);
         let out = to_responses_input(&m, &cached);
         let kinds: Vec<String> = out
             .iter()
-            .map(|i| i["role"].as_str().or(i["encrypted_content"].as_str()).or(i["type"].as_str()).unwrap().to_string())
+            .map(|i| {
+                i["role"]
+                    .as_str()
+                    .or(i["encrypted_content"].as_str())
+                    .or(i["type"].as_str())
+                    .unwrap()
+                    .to_string()
+            })
             .collect();
         assert_eq!(
             kinds,
-            ["user", "r1", "function_call", "function_call_output", "developer", "r2", "assistant", "user", "assistant", "user"]
+            [
+                "user",
+                "r1",
+                "function_call",
+                "function_call_output",
+                "developer",
+                "r2",
+                "assistant",
+                "user",
+                "assistant",
+                "user"
+            ]
         );
     }
 
@@ -680,7 +852,8 @@ mod tests {
         .unwrap();
         assert_eq!(effective_effort(&req, Some(Reasoning::Max)), "medium");
         assert_eq!(effective_effort(&req, Some(Reasoning::Low)), "low");
-        req.messages[0].content = Content::Text("Your task is to create a detailed summary of the repo".into());
+        req.messages[0].content =
+            Content::Text("Your task is to create a detailed summary of the repo".into());
         assert_eq!(effective_effort(&req, Some(Reasoning::Max)), "max");
         assert_eq!(effective_effort(&req, Some(Reasoning::None)), "low");
     }
@@ -718,12 +891,21 @@ mod tests {
             names,
             vec![
                 "message_start",
-                "content_block_start", "content_block_delta", "content_block_stop",
-                "content_block_start", "content_block_delta", "content_block_stop",
-                "content_block_start", "content_block_delta", "content_block_stop",
+                "content_block_start",
+                "content_block_delta",
+                "content_block_stop",
+                "content_block_start",
+                "content_block_delta",
+                "content_block_stop",
+                "content_block_start",
+                "content_block_delta",
+                "content_block_stop",
             ]
         );
-        assert_eq!(p.text_chars, 2, "done event must not duplicate streamed text");
+        assert_eq!(
+            p.text_chars, 2,
+            "done event must not duplicate streamed text"
+        );
         assert_eq!(p.stop_reason, "tool_use");
         assert_eq!(p.usage.input_tokens, 60);
         assert_eq!(p.usage.cache_read_input_tokens, 40);

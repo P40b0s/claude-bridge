@@ -23,7 +23,11 @@ const PROVIDER_AUTH: StatusCode = StatusCode::FAILED_DEPENDENCY;
 
 impl ProxyError {
     pub fn new(status: StatusCode, message: impl Into<String>) -> Self {
-        Self { status, message: message.into(), retry_at: None }
+        Self {
+            status,
+            message: message.into(),
+            retry_at: None,
+        }
     }
 
     pub fn bad_request(message: impl Into<String>) -> Self {
@@ -48,12 +52,20 @@ impl ProxyError {
             Ok(s) if s.is_client_error() || s.is_server_error() => s,
             _ => StatusCode::BAD_GATEWAY,
         };
-        let retry_at = (status == StatusCode::TOO_MANY_REQUESTS).then(|| limit_reset(body)).flatten();
-        Self { retry_at, ..Self::new(status, message) }
+        let retry_at = (status == StatusCode::TOO_MANY_REQUESTS)
+            .then(|| limit_reset(body))
+            .flatten();
+        Self {
+            retry_at,
+            ..Self::new(status, message)
+        }
     }
 
     pub fn client_gone() -> Self {
-        Self::new(StatusCode::from_u16(CLIENT_CLOSED).unwrap(), "client disconnected")
+        Self::new(
+            StatusCode::from_u16(CLIENT_CLOSED).unwrap(),
+            "client disconnected",
+        )
     }
 
     pub fn is_client_gone(&self) -> bool {
@@ -96,7 +108,10 @@ impl IntoResponse for ProxyError {
             let secs = ((at - crate::auth::now_ms()) / 1000).max(1);
             let headers = resp.headers_mut();
             headers.insert("retry-after", secs.into());
-            headers.insert("x-should-retry", axum::http::HeaderValue::from_static("false"));
+            headers.insert(
+                "x-should-retry",
+                axum::http::HeaderValue::from_static("false"),
+            );
         }
         resp
     }
@@ -110,7 +125,11 @@ fn limit_reset(body: &str) -> Option<i64> {
     error["resets_at"]
         .as_i64()
         .map(|s| s * 1000)
-        .or_else(|| error["resets_in_seconds"].as_i64().map(|s| crate::auth::now_ms() + s * 1000))
+        .or_else(|| {
+            error["resets_in_seconds"]
+                .as_i64()
+                .map(|s| crate::auth::now_ms() + s * 1000)
+        })
         .filter(|&at| at > crate::auth::now_ms())
 }
 
@@ -124,7 +143,11 @@ impl From<reqwest::Error> for ProxyError {
             message.push_str(&cause.to_string());
             source = cause.source();
         }
-        let status = if err.is_timeout() { StatusCode::GATEWAY_TIMEOUT } else { StatusCode::BAD_GATEWAY };
+        let status = if err.is_timeout() {
+            StatusCode::GATEWAY_TIMEOUT
+        } else {
+            StatusCode::BAD_GATEWAY
+        };
         Self::new(status, message)
     }
 }
@@ -149,9 +172,17 @@ mod tests {
     #[test]
     fn usage_limit_reset() {
         let at = crate::auth::now_ms() / 1000 + 9256;
-        let body = format!(r#"{{"error":{{"type":"usage_limit_reached","resets_at":{at},"resets_in_seconds":9256}}}}"#);
-        assert_eq!(ProxyError::upstream("OpenAI", 429, &body).retry_at, Some(at * 1000));
+        let body = format!(
+            r#"{{"error":{{"type":"usage_limit_reached","resets_at":{at},"resets_in_seconds":9256}}}}"#
+        );
+        assert_eq!(
+            ProxyError::upstream("OpenAI", 429, &body).retry_at,
+            Some(at * 1000)
+        );
         assert_eq!(ProxyError::upstream("OpenAI", 500, &body).retry_at, None);
-        assert_eq!(ProxyError::upstream("OpenAI", 429, "rate limited").retry_at, None);
+        assert_eq!(
+            ProxyError::upstream("OpenAI", 429, "rate limited").retry_at,
+            None
+        );
     }
 }

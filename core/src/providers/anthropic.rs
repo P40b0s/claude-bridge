@@ -45,7 +45,10 @@ pub fn has_client_credentials(headers: &HeaderMap) -> bool {
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
         .is_some_and(real);
-    let api_key = headers.get("x-api-key").and_then(|v| v.to_str().ok()).is_some_and(real);
+    let api_key = headers
+        .get("x-api-key")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(real);
     bearer || api_key
 }
 
@@ -78,11 +81,18 @@ pub async fn passthrough(
                  (environment or ~/.claude-bridge/.env)",
             )
         })?;
-        let header = |name: &str| client.get(name).and_then(|v| v.to_str().ok()).map(String::from);
+        let header = |name: &str| {
+            client
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .map(String::from)
+        };
         let version = header("anthropic-version")
             .or_else(|| config::env("ANTHROPIC_VERSION"))
             .unwrap_or_else(|| DEFAULT_VERSION.into());
-        rb = rb.header("x-api-key", key).header("anthropic-version", version);
+        rb = rb
+            .header("x-api-key", key)
+            .header("anthropic-version", version);
         if let Some(beta) = header("anthropic-beta") {
             rb = rb.header("anthropic-beta", beta);
         }
@@ -102,13 +112,20 @@ pub async fn passthrough(
     for (name, value) in resp.headers() {
         // Claude Code shows its own limit warnings from the rate-limit headers.
         let name = name.as_str();
-        if matches!(name, "content-type" | "request-id" | "retry-after") || name.starts_with("anthropic-ratelimit-") {
+        if matches!(name, "content-type" | "request-id" | "retry-after")
+            || name.starts_with("anthropic-ratelimit-")
+        {
             out = out.header(name, value.as_bytes());
         }
     }
     let body = if success {
-        let mut scanner =
-            UsageScanner { model: model.into(), sse, buf: Vec::new(), usage: None, on_usage: Some(Box::new(on_usage)) };
+        let mut scanner = UsageScanner {
+            model: model.into(),
+            sse,
+            buf: Vec::new(),
+            usage: None,
+            on_usage: Some(Box::new(on_usage)),
+        };
         Body::from_stream(resp.bytes_stream().inspect(move |chunk| {
             if let Ok(chunk) = chunk {
                 scanner.feed(chunk);
@@ -117,7 +134,8 @@ pub async fn passthrough(
     } else {
         Body::from_stream(resp.bytes_stream())
     };
-    out.body(body).map_err(|e| ProxyError::internal(e.to_string()))
+    out.body(body)
+        .map_err(|e| ProxyError::internal(e.to_string()))
 }
 
 /// Reads token usage out of the piped reply without changing it, and logs it once the reply
@@ -202,19 +220,45 @@ mod tests {
 
     #[test]
     fn scanner_reads_stream_usage() {
-        let mut s = UsageScanner { model: "m".into(), sse: true, buf: Vec::new(), usage: None, on_usage: None };
+        let mut s = UsageScanner {
+            model: "m".into(),
+            sse: true,
+            buf: Vec::new(),
+            usage: None,
+            on_usage: None,
+        };
         s.feed(b"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5,\"cache_read_input_tokens\":90,\"cache_creation_input_tokens\":3,\"output_tokens\":1}}}\n\nevent: message_delta\ndata: {\"type\":\"message_de");
         s.feed(b"lta\",\"usage\":{\"output_tokens\":42}}\n\n");
         let u = s.usage.unwrap();
-        assert_eq!((u.input_tokens, u.cache_read_input_tokens, u.cache_creation_input_tokens, u.output_tokens), (5, 90, 3, 42));
+        assert_eq!(
+            (
+                u.input_tokens,
+                u.cache_read_input_tokens,
+                u.cache_creation_input_tokens,
+                u.output_tokens
+            ),
+            (5, 90, 3, 42)
+        );
     }
 
     #[test]
     fn placeholder_is_not_a_login() {
         assert!(!has_client_credentials(&headers(&[])));
-        assert!(!has_client_credentials(&headers(&[("authorization", "Bearer claude-bridge")])));
-        assert!(!has_client_credentials(&headers(&[("x-api-key", "claude-bridge")])));
-        assert!(has_client_credentials(&headers(&[("authorization", "Bearer sk-ant-oat01-x")])));
-        assert!(has_client_credentials(&headers(&[("x-api-key", "sk-ant-api03-x")])));
+        assert!(!has_client_credentials(&headers(&[(
+            "authorization",
+            "Bearer claude-bridge"
+        )])));
+        assert!(!has_client_credentials(&headers(&[(
+            "x-api-key",
+            "claude-bridge"
+        )])));
+        assert!(has_client_credentials(&headers(&[(
+            "authorization",
+            "Bearer sk-ant-oat01-x"
+        )])));
+        assert!(has_client_credentials(&headers(&[(
+            "x-api-key",
+            "sk-ant-api03-x"
+        )])));
     }
 }

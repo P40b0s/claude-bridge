@@ -49,11 +49,20 @@ fn client(timeout: Option<Duration>) -> reqwest::Client {
 }
 
 pub async fn health(port: u16) -> Option<Health> {
-    let resp = client(Some(Duration::from_secs(2))).get(format!("{}/healthz", base_url(port))).send().await.ok()?;
+    let resp = client(Some(Duration::from_secs(2)))
+        .get(format!("{}/healthz", base_url(port)))
+        .send()
+        .await
+        .ok()?;
     resp.error_for_status().ok()?.json().await.ok()
 }
 
-async fn control(port: u16, method: reqwest::Method, path: &str, body: Option<Value>) -> anyhow::Result<reqwest::Response> {
+async fn control(
+    port: u16,
+    method: reqwest::Method,
+    path: &str,
+    body: Option<Value>,
+) -> anyhow::Result<reqwest::Response> {
     let mut rb = client(Some(Duration::from_secs(5)))
         .request(method, format!("{}{path}", base_url(port)))
         .header(SHUTDOWN_HEADER, "1");
@@ -64,7 +73,9 @@ async fn control(port: u16, method: reqwest::Method, path: &str, body: Option<Va
     if !resp.status().is_success() {
         let status = resp.status();
         let body: Value = resp.json().await.unwrap_or_default();
-        let message = body["error"]["message"].as_str().unwrap_or("request failed");
+        let message = body["error"]["message"]
+            .as_str()
+            .unwrap_or("request failed");
         bail!("{message} ({status})");
     }
     Ok(resp)
@@ -87,7 +98,13 @@ pub async fn stop(port: u16) -> anyhow::Result<bool> {
 
 /// Routes every request to `model` (a `/model` spec such as `terra@max`) until unpinned.
 pub async fn pin_model(port: u16, model: &str) -> anyhow::Result<Target> {
-    let resp = control(port, reqwest::Method::PUT, "/_model", Some(json!({ "model": model }))).await?;
+    let resp = control(
+        port,
+        reqwest::Method::PUT,
+        "/_model",
+        Some(json!({ "model": model })),
+    )
+    .await?;
     Ok(resp.json().await?)
 }
 
@@ -108,10 +125,16 @@ pub async fn tunnel_port(port: u16, exit: &str) -> anyhow::Result<u16> {
         .context("proxy is not running")?;
     if !resp.status().is_success() {
         let body: Value = resp.json().await.unwrap_or_default();
-        bail!("{}", body["error"]["message"].as_str().unwrap_or("tunnel failed"));
+        bail!(
+            "{}",
+            body["error"]["message"].as_str().unwrap_or("tunnel failed")
+        );
     }
     let body: Value = resp.json().await?;
-    body["port"].as_u64().and_then(|p| u16::try_from(p).ok()).context("proxy gave no tunnel port")
+    body["port"]
+        .as_u64()
+        .and_then(|p| u16::try_from(p).ok())
+        .context("proxy gave no tunnel port")
 }
 
 /// Where every exit and provider comes out, checked by the running proxy (it owns the SSH tunnels).
@@ -128,7 +151,11 @@ pub async fn exits_report(port: u16) -> anyhow::Result<crate::exits::Report> {
 
 /// Recent request records followed by live updates; ends when the proxy goes away.
 pub async fn events(port: u16) -> anyhow::Result<impl Stream<Item = RequestRecord>> {
-    let resp = client(None).get(format!("{}/_events", base_url(port))).send().await?.error_for_status()?;
+    let resp = client(None)
+        .get(format!("{}/_events", base_url(port)))
+        .send()
+        .await?
+        .error_for_status()?;
     Ok(resp
         .bytes_stream()
         .eventsource()
@@ -142,7 +169,10 @@ fn open_log() -> anyhow::Result<std::fs::File> {
     if std::fs::metadata(&path).is_ok_and(|m| m.len() > MAX_LOG_BYTES) {
         let _ = std::fs::rename(&path, path.with_extension("log.1"));
     }
-    Ok(std::fs::OpenOptions::new().create(true).append(true).open(&path)?)
+    Ok(std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)?)
 }
 
 /// Append-only log file that moves itself to `.log.1` once it grows past `MAX_LOG_BYTES`.
@@ -157,7 +187,10 @@ struct RotatingFile {
 
 impl RotatingLog {
     pub fn open(path: PathBuf) -> std::io::Result<Self> {
-        let file = std::fs::OpenOptions::new().create(true).append(true).open(&path)?;
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)?;
         let len = file.metadata()?.len();
         Ok(Self(Arc::new(Mutex::new(RotatingFile { path, file, len }))))
     }
@@ -168,7 +201,10 @@ impl Write for RotatingLog {
         let mut log = self.0.lock().unwrap_or_else(|e| e.into_inner());
         if log.len > 0 && log.len + buf.len() as u64 > MAX_LOG_BYTES {
             let _ = std::fs::rename(&log.path, log.path.with_extension("log.1"));
-            log.file = std::fs::OpenOptions::new().create(true).append(true).open(&log.path)?;
+            log.file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&log.path)?;
             log.len = 0;
         }
         let n = log.file.write(buf)?;
@@ -177,24 +213,47 @@ impl Write for RotatingLog {
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        self.0.lock().unwrap_or_else(|e| e.into_inner()).file.flush()
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .file
+            .flush()
     }
 }
 
 /// The `claude-bridge` CLI binary: `CLAUDE_BRIDGE_BIN`, next to this executable, ~/.cargo/bin, then PATH.
 pub fn find_cli() -> Option<PathBuf> {
-    let name = if cfg!(windows) { "claude-bridge.exe" } else { "claude-bridge" };
+    let name = if cfg!(windows) {
+        "claude-bridge.exe"
+    } else {
+        "claude-bridge"
+    };
     let explicit = config::env("CLAUDE_BRIDGE_BIN").map(PathBuf::from);
-    let sibling = std::env::current_exe().ok().and_then(|exe| exe.parent().map(|dir| dir.join(name)));
+    let sibling = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join(name)));
     let cargo = Some(config::home_dir().join(".cargo").join("bin").join(name));
     let on_path = std::env::var_os("PATH")
-        .map(|paths| std::env::split_paths(&paths).map(|dir| dir.join(name)).collect::<Vec<_>>())
+        .map(|paths| {
+            std::env::split_paths(&paths)
+                .map(|dir| dir.join(name))
+                .collect::<Vec<_>>()
+        })
         .unwrap_or_default();
-    [explicit, sibling, cargo].into_iter().flatten().chain(on_path).find(|p| p.is_file())
+    [explicit, sibling, cargo]
+        .into_iter()
+        .flatten()
+        .chain(on_path)
+        .find(|p| p.is_file())
 }
 
 /// Reuses a healthy proxy, or starts `cli serve` detached and waits for it to answer.
-pub async fn ensure_proxy(cli: &Path, port: u16, default: &str, restart: bool) -> anyhow::Result<Health> {
+pub async fn ensure_proxy(
+    cli: &Path,
+    port: u16,
+    default: &str,
+    restart: bool,
+) -> anyhow::Result<Health> {
     if let Some(h) = health(port).await {
         if !restart {
             return Ok(h);
@@ -223,7 +282,9 @@ pub async fn ensure_proxy(cli: &Path, port: u16, default: &str, restart: bool) -
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
         cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
     }
-    let mut child = cmd.spawn().with_context(|| format!("starting {}", cli.display()))?;
+    let mut child = cmd
+        .spawn()
+        .with_context(|| format!("starting {}", cli.display()))?;
 
     let deadline = tokio::time::Instant::now() + STARTUP_TIMEOUT;
     while tokio::time::Instant::now() < deadline {
@@ -238,5 +299,8 @@ pub async fn ensure_proxy(cli: &Path, port: u16, default: &str, restart: bool) -
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
     let _ = child.kill();
-    bail!("proxy did not become healthy in {STARTUP_TIMEOUT:?}; see {}", log_path().display())
+    bail!(
+        "proxy did not become healthy in {STARTUP_TIMEOUT:?}; see {}",
+        log_path().display()
+    )
 }

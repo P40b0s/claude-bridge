@@ -18,7 +18,6 @@ class AccountsPage extends StatelessWidget {
     return ListenableBuilder(
       listenable: Listenable.merge([accounts, settings]),
       builder: (context, _) {
-        final chatgpt = accounts.chatgpt;
         final codexUsage = accounts.codexUsage;
         final on = settings.isEnabled;
         if (settings.disabledProviders.containsAll(const [
@@ -41,39 +40,72 @@ class AccountsPage extends StatelessWidget {
           padding: const EdgeInsets.all(24),
           children: [
             if (on('anthropic'))
-              _ClaudeCodeCard(
-                account: accounts.claudeCode,
-                usage: accounts.claudeUsage,
+              _AccountGroup(
+                title: 'Claude',
+                icon: Icons.psychology_outlined,
+                onAdd: () => _newAccount(context, AuthProvider.claude),
+                children: [
+                  for (final account in accounts.claudeAccounts)
+                    _ClaudeCodeCard(
+                      account: account,
+                      usage: account.active ? accounts.claudeUsage : null,
+                    ),
+                  if (accounts.claudeAccounts.isEmpty)
+                    _EmptyAccounts(
+                      text: tr(
+                        'Нет сохранённых аккаунтов Claude',
+                        'No saved Claude accounts',
+                      ),
+                    ),
+                ],
               ),
             if (on('codex'))
-              _AccountCard(
+              _AccountGroup(
                 title: 'ChatGPT / Codex',
                 icon: Icons.auto_awesome,
-                provider: AuthProvider.chatGpt,
-                signedIn: chatgpt != null,
-                details: [
-                  if (chatgpt != null) ...[
-                    tr(
-                      '${chatgpt.email ?? 'неизвестный аккаунт'}, план ${chatgpt.plan ?? 'неизвестен'}',
-                      '${chatgpt.email ?? 'unknown account'}, plan ${chatgpt.plan ?? 'unknown'}',
+                onAdd: () => _newAccount(context, AuthProvider.chatGpt),
+                children: [
+                  for (final account in accounts.chatgptAccounts)
+                    _AccountCard(
+                      title: account.id,
+                      icon: Icons.account_circle_outlined,
+                      provider: AuthProvider.chatGpt,
+                      profile: account.id,
+                      active: account.active,
+                      signedIn: true,
+                      details: [
+                        tr(
+                          '${account.email ?? 'неизвестный аккаунт'}, план ${account.plan ?? 'неизвестен'}',
+                          '${account.email ?? 'unknown account'}, plan ${account.plan ?? 'unknown'}',
+                        ),
+                        if (account.subscriptionUntil != null)
+                          formatSubscriptionEnd(account.subscriptionUntil!),
+                        account.source == 'codex-cli'
+                            ? tr(
+                                'токены Codex CLI (~/.codex/auth.json)',
+                                'Codex CLI tokens (~/.codex/auth.json)',
+                              )
+                            : tr(
+                                'вход через claude-bridge',
+                                'claude-bridge login',
+                              ),
+                        formatExpiry(account.expiresAt),
+                      ],
+                      hint: tr(
+                        'Модели GPT-5.6 Sol, Terra, Luna и GPT-5.5 по подписке ChatGPT.',
+                        'GPT-5.6 Sol, Terra, Luna and GPT-5.5 on a ChatGPT subscription.',
+                      ),
+                      canLogout: account.source != 'codex-cli',
+                      usage: account.active ? _usage(codexUsage) : null,
                     ),
-                    if (chatgpt.subscriptionUntil != null)
-                      formatSubscriptionEnd(chatgpt.subscriptionUntil!),
-                    chatgpt.source == 'codex-cli'
-                        ? tr(
-                            'токены Codex CLI (~/.codex/auth.json)',
-                            'Codex CLI tokens (~/.codex/auth.json)',
-                          )
-                        : tr('вход через claude-bridge', 'claude-bridge login'),
-                    formatExpiry(chatgpt.expiresAt),
-                  ],
+                  if (accounts.chatgptAccounts.isEmpty)
+                    _EmptyAccounts(
+                      text: tr(
+                        'Нет сохранённых аккаунтов ChatGPT',
+                        'No saved ChatGPT accounts',
+                      ),
+                    ),
                 ],
-                hint: tr(
-                  'Модели GPT-5.6 Sol, Terra, Luna и GPT-5.5 по подписке ChatGPT.',
-                  'GPT-5.6 Sol, Terra, Luna and GPT-5.5 on a ChatGPT subscription.',
-                ),
-                canLogout: chatgpt?.source != 'codex-cli',
-                usage: chatgpt == null ? null : _usage(codexUsage),
               ),
             if (on('openai-compat')) const _OpenAiCompatCard(),
             if (on('openai'))
@@ -122,9 +154,120 @@ class AccountsPage extends StatelessWidget {
     }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
-      children: [UsageBars(usage: usage), _ResetsList(usage.resets)],
+      children: [
+        UsageBars(usage: usage),
+        _ResetsList(usage.resets),
+      ],
     );
   }
+}
+
+Future<void> _newAccount(BuildContext context, AuthProvider provider) async {
+  final controller = TextEditingController();
+  String? error;
+  final profile = await showDialog<String>(
+    context: context,
+    builder: (dialogContext) => StatefulBuilder(
+      builder: (context, setDialogState) => AlertDialog(
+        title: Text(tr('Добавить аккаунт', 'Add account')),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: InputDecoration(
+            labelText: tr('Имя профиля', 'Profile name'),
+            hintText: 'work-account',
+            errorText: error,
+            helperText: tr(
+              'Буквы, цифры, точка, дефис и подчёркивание',
+              'Letters, digits, dot, dash and underscore',
+            ),
+          ),
+          onSubmitted: (_) {
+            final value = controller.text.trim();
+            if (RegExp(r'^[A-Za-z0-9._-]{1,64}$').hasMatch(value) &&
+                value != '.' &&
+                value != '..') {
+              Navigator.pop(dialogContext, value);
+            } else {
+              setDialogState(
+                () => error = tr('Недопустимое имя', 'Invalid name'),
+              );
+            }
+          },
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: Text(tr('Отмена', 'Cancel')),
+          ),
+          FilledButton(
+            onPressed: () {
+              final value = controller.text.trim();
+              if (RegExp(r'^[A-Za-z0-9._-]{1,64}$').hasMatch(value) &&
+                  value != '.' &&
+                  value != '..') {
+                Navigator.pop(dialogContext, value);
+              } else {
+                setDialogState(
+                  () => error = tr('Недопустимое имя', 'Invalid name'),
+                );
+              }
+            },
+            child: Text(tr('Войти', 'Log in')),
+          ),
+        ],
+      ),
+    ),
+  );
+  controller.dispose();
+  if (profile != null && context.mounted) {
+    context.appServices.accountsService.login(provider, profile);
+  }
+}
+
+class _AccountGroup extends StatelessWidget {
+  const _AccountGroup({
+    required this.title,
+    required this.icon,
+    required this.onAdd,
+    required this.children,
+  });
+  final String title;
+  final IconData icon;
+  final VoidCallback onAdd;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) => SectionCard(
+    title: title,
+    icon: icon,
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        ...children,
+        const SizedBox(height: 8),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: FilledButton.icon(
+            onPressed: onAdd,
+            icon: const Icon(Icons.person_add_alt_1),
+            label: Text(tr('Добавить аккаунт', 'Add account')),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+class _EmptyAccounts extends StatelessWidget {
+  const _EmptyAccounts({required this.text});
+  final String text;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 12),
+    child: Text(text, style: TextStyle(color: Theme.of(context).hintColor)),
+  );
 }
 
 ///Бесплатные сбросы лимитов Codex: каждый можно потратить кнопкой
@@ -163,8 +306,14 @@ class _ResetsListState extends State<_ResetsList> {
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: Text(tr('Отмена', 'Cancel'))),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: Text(tr('Сбросить', 'Reset'))),
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(tr('Отмена', 'Cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(tr('Сбросить', 'Reset')),
+          ),
         ],
       ),
     );
@@ -190,7 +339,10 @@ class _ResetsListState extends State<_ResetsList> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            tr('Бесплатные сбросы лимитов: ${widget.resets.length}', 'Free limit resets: ${widget.resets.length}'),
+            tr(
+              'Бесплатные сбросы лимитов: ${widget.resets.length}',
+              'Free limit resets: ${widget.resets.length}',
+            ),
             style: theme.textTheme.titleSmall,
           ),
           for (final r in widget.resets)
@@ -201,9 +353,18 @@ class _ResetsListState extends State<_ResetsList> {
               title: Text(r.title),
               subtitle: r.expiresAt == null
                   ? null
-                  : Text(tr('действует до ${formatDateTime(r.expiresAt!)}', 'expires ${formatDateTime(r.expiresAt!)}')),
+                  : Text(
+                      tr(
+                        'действует до ${formatDateTime(r.expiresAt!)}',
+                        'expires ${formatDateTime(r.expiresAt!)}',
+                      ),
+                    ),
               trailing: _using == r.id
-                  ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
                   : OutlinedButton(
                       onPressed: _using != null ? null : () => _use(r),
                       child: Text(tr('Использовать', 'Use')),
@@ -220,6 +381,8 @@ class _AccountCard extends StatelessWidget {
     required this.title,
     required this.icon,
     required this.provider,
+    required this.profile,
+    required this.active,
     required this.signedIn,
     required this.details,
     required this.hint,
@@ -229,6 +392,8 @@ class _AccountCard extends StatelessWidget {
   final String title;
   final IconData icon;
   final AuthProvider provider;
+  final String profile;
+  final bool active;
   final bool signedIn;
   final List<String> details;
   final String hint;
@@ -238,16 +403,16 @@ class _AccountCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final service = context.appServices.accountsService;
-    final waiting = service.provider.isWaiting(provider);
+    final waiting = service.provider.isWaiting(provider, profile);
     final login = service.provider.login;
     final theme = Theme.of(context);
     return _StatusCard(
       title: title,
       icon: icon,
       ok: signedIn,
-      status: signedIn
-          ? tr('Вход выполнен', 'Logged in')
-          : tr('Вход не выполнен', 'Not logged in'),
+      status: active
+          ? tr('Активный аккаунт', 'Active account')
+          : tr('Сохранён', 'Saved'),
       details: details,
       hint: hint,
       trailing: waiting
@@ -258,15 +423,22 @@ class _AccountCard extends StatelessWidget {
           : Wrap(
               spacing: 8,
               children: [
+                if (!active)
+                  OutlinedButton(
+                    onPressed: service.provider.anyWaiting
+                        ? null
+                        : () => service.activate(provider, profile),
+                    child: Text(tr('Активировать', 'Activate')),
+                  ),
                 if (signedIn && canLogout)
                   OutlinedButton(
-                    onPressed: () => service.logout(provider),
+                    onPressed: () => service.logout(provider, profile),
                     child: Text(tr(tr('Выйти', 'Log out'), 'Log out')),
                   ),
                 FilledButton(
                   onPressed: service.provider.anyWaiting
                       ? null
-                      : () => service.login(provider),
+                      : () => service.login(provider, profile),
                   child: Text(
                     signedIn
                         ? tr('Войти заново', 'Log in again')
@@ -610,38 +782,59 @@ class _StatusCard extends StatelessWidget {
 ///Claude по подписке: Claude Code входит сам, прокси только пересылает его запросы
 class _ClaudeCodeCard extends StatelessWidget {
   const _ClaudeCodeCard({required this.account, required this.usage});
-  final ClaudeCodeAccount? account;
+  final ClaudeCodeAccount account;
   final Usage? usage;
 
   @override
   Widget build(BuildContext context) {
-    final signedIn = account != null;
+    final service = context.appServices.accountsService;
+    final waiting = service.provider.isWaiting(AuthProvider.claude, account.id);
     return _StatusCard(
-      title: 'Claude',
-      icon: Icons.psychology_outlined,
-      ok: signedIn,
-      status: signedIn
-          ? tr('Вход Claude Code', 'Claude Code login')
-          : tr('Claude Code не вошел', "Claude Code isn't logged in"),
+      title: account.id,
+      icon: Icons.account_circle_outlined,
+      ok: true,
+      status: account.active
+          ? tr('Активный аккаунт', 'Active account')
+          : tr('Сохранён', 'Saved'),
       details: [
-        if (signedIn) ...[
-          account!.email ?? tr('неизвестный аккаунт', 'unknown account'),
-          _plan(account!),
-        ],
-        if (!signedIn)
-          tr(
-            'Запустите claude и выполните /login, или задайте ключ Anthropic API ниже',
-            'Run claude and do /login, or set an Anthropic API key below',
-          ),
+        account.email ?? tr('неизвестный аккаунт', 'unknown account'),
+        _plan(account),
       ],
       hint: tr(
-        'Claude Code входит сам; прокси пересылает его запросы к Claude как есть и не хранит токены. '
-            'В сессии /model opus (или anthropic:sonnet, anthropic:haiku) — Claude, остальные модели — через прокси. '
-            'Пока в сессии выбрана не Claude, в Anthropic из нее не уходит ни одного запроса.',
-        'Claude Code logs in itself; the proxy relays its Claude requests as is and stores no tokens. '
-            'In a session, /model opus (or anthropic:sonnet, anthropic:haiku) is Claude, other models go through the proxy. '
-            'While a non-Claude model is selected, the session sends nothing to Anthropic.',
+        'История проектов, настройки и MCP общие для всех аккаунтов; переключаются только OAuth-данные. '
+            'Перед активацией другого аккаунта закройте запущенные сессии Claude Code.',
+        'Project history, settings and MCP are shared by every account; only OAuth data is switched. '
+            'Close running Claude Code sessions before activating another account.',
       ),
+      trailing: waiting
+          ? OutlinedButton(
+              onPressed: service.cancelLogin,
+              child: Text(tr('Отменить', 'Cancel')),
+            )
+          : Wrap(
+              spacing: 8,
+              children: [
+                if (!account.active)
+                  OutlinedButton(
+                    onPressed: service.provider.anyWaiting
+                        ? null
+                        : () =>
+                              service.activate(AuthProvider.claude, account.id),
+                    child: Text(tr('Активировать', 'Activate')),
+                  ),
+                OutlinedButton(
+                  onPressed: () =>
+                      service.logout(AuthProvider.claude, account.id),
+                  child: Text(tr('Выйти', 'Log out')),
+                ),
+                FilledButton(
+                  onPressed: service.provider.anyWaiting
+                      ? null
+                      : () => service.login(AuthProvider.claude, account.id),
+                  child: Text(tr('Войти заново', 'Log in again')),
+                ),
+              ],
+            ),
       footer: [
         if (usage != null)
           UsageBars(
@@ -651,27 +844,32 @@ class _ClaudeCodeCard extends StatelessWidget {
               "from Claude's last reply through the proxy",
             ),
           )
-        else if (signedIn)
+        else if (account.active)
           _UsageNote(
             tr(
               'Лимиты появятся после первого запроса к Claude через прокси.',
               'Limits appear after the first Claude request through the proxy.',
             ),
           ),
-        if (signedIn)
+        if (account.active)
           Padding(
             padding: const EdgeInsets.only(top: 8),
             child: Tooltip(
               message: tr(
                 'Бесплатный сброс лимитов, если Anthropic его выдал, есть только на сайте: Settings → Usage → Reset for free. '
-                    'Страница откроется в обычном браузере, мимо прокси: включите VPN той же страны, что и выход Anthropic.',
+                    'Страница откроется в выбранном браузере через выход Anthropic.',
                 'A free limit reset, when Anthropic grants one, is only on the website: Settings → Usage → Reset for free. '
-                    'The page opens in your usual browser, not through the proxy: turn on a VPN in the same country as the Anthropic exit.',
+                    'The page opens in the selected browser through the Anthropic exit.',
               ),
               child: TextButton.icon(
                 onPressed: () => OpenClaudeUsage().sendSignalToRust(),
                 icon: const Icon(Icons.open_in_new, size: 18),
-                label: Text(tr('Лимиты и сбросы на claude.ai', 'Limits and resets on claude.ai')),
+                label: Text(
+                  tr(
+                    'Лимиты и сбросы на claude.ai',
+                    'Limits and resets on claude.ai',
+                  ),
+                ),
               ),
             ),
           ),

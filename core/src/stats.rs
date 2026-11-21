@@ -71,7 +71,10 @@ pub fn today() -> Date {
 }
 
 pub fn load(date: Date) -> Day {
-    std::fs::read_to_string(path(date)).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+    std::fs::read_to_string(path(date))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
 }
 
 /// Adds one finished request to today's file.
@@ -80,7 +83,10 @@ pub fn record(provider: &str, model: &str, usage: &Usage) {
     let _guard = LOCK.lock().unwrap();
     let date = today();
     let mut day = load(date);
-    day.models.entry(format!("{provider}:{model}")).or_default().add(&Tokens::of(usage));
+    day.models
+        .entry(format!("{provider}:{model}"))
+        .or_default()
+        .add(&Tokens::of(usage));
     if let Err(e) = write(date, &day) {
         warn!("stats: {e:#}");
     }
@@ -118,6 +124,9 @@ mod tests {
     fn sums_models_and_reads_old_files() {
         let day: Day = serde_json::from_str(r#"{"models":{"a:x":{"requests":2,"input":10,"output":5},"b:y":{"requests":1,"cache_read":100}}}"#).unwrap();
         let t = day.total();
-        assert_eq!((t.requests, t.input, t.cache_read, t.output), (3, 10, 100, 5));
+        assert_eq!(
+            (t.requests, t.input, t.cache_read, t.output),
+            (3, 10, 100, 5)
+        );
     }
 }
